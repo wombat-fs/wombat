@@ -64,6 +64,8 @@ _SEL_COLOR = QColor("#ffffff")
 _RUBBER_BAND_FILL = QColor(255, 255, 255, 20)
 _RUBBER_BAND_BORDER = QColor(255, 255, 255, 120)
 _ACTIVE_BORDER = QColor(255, 255, 255, 40)
+_GRID_LINE = QColor(255, 255, 255, 14)   # subtle vertical time grid
+_T0_LINE = QColor(255, 255, 255, 90)     # solid t=0 marker
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -453,6 +455,7 @@ class TimelineWidget(QWidget):
 
         painter.fillRect(self.rect(), _BG)
         self._draw_ruler(painter)
+        self._draw_time_grid(painter)
 
         num = max(1, len(self._channels))
         lane_area_top = _RULER_H
@@ -478,6 +481,32 @@ class TimelineWidget(QWidget):
 
         self._draw_playhead(painter)
         painter.end()
+
+    def _draw_time_grid(self, painter: QPainter) -> None:
+        """Vertical grid lines across the lane area at ruler tick intervals, plus t=0."""
+        top = _RULER_H
+        bottom = self.height()
+        t0, t1 = self._viewport.time_window()
+
+        # Tick-interval grid lines (same spacing as ruler labels)
+        interval = _nice_tick_interval(self._viewport.visible_time)
+        first_tick = math.ceil(t0 / interval) * interval
+        grid_pen = QPen(_GRID_LINE, 1)
+        grid_pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(grid_pen)
+        t = first_tick
+        while t <= t1 + interval * 0.01:
+            if abs(t) > 1e-9:  # skip t=0 here; drawn separately below
+                x = int(self._viewport.time_to_x(t))
+                if 0 <= x <= self.width():
+                    painter.drawLine(x, top, x, bottom)
+            t += interval
+
+        # t=0: solid, more prominent — marks the start of the video
+        x0 = int(self._viewport.time_to_x(0.0))
+        if 0 <= x0 <= self.width():
+            painter.setPen(QPen(_T0_LINE, 1))
+            painter.drawLine(x0, top, x0, bottom)
 
     def _draw_ruler(self, painter: QPainter) -> None:
         painter.fillRect(QRect(0, 0, self.width(), _RULER_H), _RULER_BG)
