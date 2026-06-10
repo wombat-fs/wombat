@@ -46,6 +46,9 @@ class WaveformLoader(QObject):
         worker.done.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        # Clear refs only after the thread has actually stopped, preventing
+        # premature GC of the QThread while it is still running.
+        thread.finished.connect(self._on_thread_finished)
         self._thread = thread
         self._worker = worker
         thread.start()
@@ -57,7 +60,9 @@ class WaveformLoader(QObject):
         self._thread = None
         self._worker = None
 
-    def _on_done(self, data: object) -> None:
+    def _on_thread_finished(self) -> None:
         self._thread = None
         self._worker = None
+
+    def _on_done(self, data: object) -> None:
         self.waveform_ready.emit(data)

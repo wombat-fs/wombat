@@ -793,7 +793,7 @@ class TimelineWidget(QWidget):
             painter.drawLine(0, y, self.width(), y)
 
         # Waveform underlay (behind action graph)
-        self._draw_waveform(painter, lane, is_active_ch)
+        self._draw_waveform(painter, lane, is_active)
 
         # Expand/collapse toggle
         expand_char = "▼" if lane.ch_idx in self._expanded_channels else "▶"
