@@ -110,6 +110,7 @@ class EditorController(QObject):
             return
         if self._snap_to_frame:
             at = self._snap(at)
+        at = max(0.0, at)
         self._undo.snapshot("Add action", self._targets(), self.selection)
         self._layer().add(Action(at, pos))
         self.active_channel._invalidate_cache()
@@ -182,7 +183,7 @@ class EditorController(QObject):
         new_sel: set[float] = set()
         for a in self._pre_move_snapshot:
             if a.at in self._pre_move_selection:
-                new_at = a.at + d_seconds
+                new_at = max(0.0, a.at + d_seconds)
                 if self._snap_to_frame:
                     new_at = self._snap(new_at)
                 new_pos = max(0, min(100, a.pos + d_pos))
