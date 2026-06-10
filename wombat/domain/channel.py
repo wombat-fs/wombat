@@ -37,6 +37,7 @@ class Layer:
 class Channel:
     name: str
     layers: list[Layer] = field(default_factory=list)   # layers[0] = base
+    enabled: bool = True
     _synthesis_cache: ActionList | None = field(
         default=None, init=False, repr=False, compare=False
     )

@@ -4,15 +4,17 @@ Paint order per frame:
   1. Background fill
   2. Ruler strip (top)
   3. Per-lane: height guides → line segments → action nodes → channel label
-  4. Rubber-band rectangle (if dragging)
-  5. Playhead (on top of everything)
+  4. Active-lane border (subtle highlight)
+  5. Rubber-band rectangle (if dragging)
+  6. Playhead (on top of everything)
 
 Mouse interactions (requires EditorController via set_editor()):
-  Left-click empty lane  → ScriptingMode.add_point
-  Left-drag empty area   → rubber-band select (moves > _DRAG_THRESHOLD px)
-  Left-click action node → select (Shift/Ctrl = additive)
-  Left-drag action node  → move selection as one undo step
-  Ruler click            → seek
+  Left-click inactive lane → activate that channel (no edit)
+  Left-click empty lane   → ScriptingMode.add_point
+  Left-drag empty area    → rubber-band select (moves > _DRAG_THRESHOLD px)
+  Left-click action node  → select (Shift/Ctrl = additive)
+  Left-drag action node   → move selection as one undo step
+  Ruler click             → seek
 """
 from __future__ import annotations
 
@@ -42,6 +44,7 @@ from wombat.ui.timeline.viewport import Viewport
 
 if TYPE_CHECKING:
     from wombat.app.editor import EditorController
+    from wombat.app.project import Project
     from wombat.ui.scripting.mode import ScriptingMode
 
 # ------------------------------------------------------------------ constants
@@ -60,6 +63,7 @@ _PLAYHEAD_COLOR = QColor("#ffffff")
 _SEL_COLOR = QColor("#ffffff")
 _RUBBER_BAND_FILL = QColor(255, 255, 255, 20)
 _RUBBER_BAND_BORDER = QColor(255, 255, 255, 120)
+_ACTIVE_BORDER = QColor(255, 255, 255, 40)
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -119,6 +123,7 @@ class TimelineWidget(QWidget):
         self._player = player
         self._channels: list[Channel] = []
         self._active_index: int = 0
+        self._project: Project | None = None
         self._viewport = Viewport(
             offset=0.0,
             visible_time=30.0,
@@ -168,8 +173,29 @@ class TimelineWidget(QWidget):
         editor.actions_changed.connect(self.update)
         editor.selection_changed.connect(self.update)
 
+    def set_project(self, project: Project) -> None:
+        if self._project is not None:
+            try:
+                self._project.channels_changed.disconnect(self._on_channels_changed)
+                self._project.active_changed.disconnect(self._on_active_changed)
+            except RuntimeError:
+                pass
+        self._project = project
+        self._channels = list(project.channels)
+        self._active_index = project.active_index
+        project.channels_changed.connect(self._on_channels_changed)
+        project.active_changed.connect(self._on_active_changed)
+        self.update()
+
     def set_scripting_mode(self, mode: ScriptingMode) -> None:
         self._scripting_mode = mode
+
+    def get_view_state(self) -> tuple[float, float]:
+        return self._viewport.offset, self._viewport.visible_time
+
+    def restore_view_state(self, offset: float, visible_time: float) -> None:
+        self._viewport = replace(self._viewport, offset=offset, visible_time=visible_time)
+        self.update()
 
     def sizeHint(self) -> QSize:
         return QSize(800, 120)
@@ -188,6 +214,18 @@ class TimelineWidget(QWidget):
     def _on_playback_changed(self, paused: bool) -> None:
         if not paused:
             self._follow = True
+
+    @Slot()
+    def _on_channels_changed(self) -> None:
+        if self._project is not None:
+            self._channels = list(self._project.channels)
+            self._active_index = self._project.active_index
+        self.update()
+
+    @Slot(int)
+    def _on_active_changed(self, index: int) -> None:
+        self._active_index = index
+        self.update()
 
     # ----------------------------------------------------------------- events
 
@@ -224,6 +262,16 @@ class TimelineWidget(QWidget):
         if y < _RULER_H:
             t = self._viewport.x_to_time(x)
             self._player.seek_exact(t)
+            event.accept()
+            return
+
+        # Determine which lane was clicked
+        lane_idx = self._lane_at_y(y)
+
+        # Click on inactive lane → activate it; no edit
+        if lane_idx != self._active_index and self._project is not None and len(self._channels) > 1:
+            self._project.set_active(lane_idx)
+            self._follow = False
             event.accept()
             return
 
@@ -368,13 +416,21 @@ class TimelineWidget(QWidget):
 
     # ----------------------------------------------------------------- helpers
 
+    def _lane_at_y(self, y: float) -> int:
+        """Return the lane index (0-based) corresponding to a y coordinate."""
+        n = max(1, len(self._channels))
+        lane_area_h = max(1, self.height() - _RULER_H)
+        per_lane_h = lane_area_h // n
+        idx = int((y - _RULER_H) / per_lane_h) if per_lane_h > 0 else 0
+        return max(0, min(n - 1, idx))
+
     def _active_lane_vp(self) -> Viewport:
-        """Viewport for the active channel's lane (Phase 4: single lane = full area)."""
+        """Viewport for the active channel's lane."""
         n = max(1, len(self._channels))
         lane_area_top = _RULER_H
         lane_area_h = max(1, self.height() - _RULER_H)
         per_lane_h = lane_area_h // n
-        i = self._editor._active_idx if self._editor is not None else 0
+        i = self._active_index
         i = max(0, min(n - 1, i))
         top = lane_area_top + i * per_lane_h
         h = per_lane_h if i < n - 1 else lane_area_h - i * per_lane_h
@@ -410,7 +466,12 @@ class TimelineWidget(QWidget):
             h = per_lane_h if i < num - 1 else lane_area_h - i * per_lane_h
             lane_vp = replace(self._viewport, lane_top=top, lane_height=max(1, h))
             color = _LANE_COLORS[i % len(_LANE_COLORS)]
-            self._draw_lane(painter, lane_vp, ch, i == self._active_index, color, sel)
+            is_active = i == self._active_index
+            self._draw_lane(painter, lane_vp, ch, is_active, color, sel)
+            if is_active and num > 1:
+                painter.setPen(QPen(_ACTIVE_BORDER, 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(0, top, self.width() - 1, h - 1)
 
         if self._drag_mode == _DragMode.RUBBER_BAND:
             self._draw_rubber_band(painter)

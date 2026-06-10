@@ -3,7 +3,8 @@
 All writes go through here: snapshot undo, mutate the active layer,
 invalidate the synthesis cache, emit signals so the timeline repaints.
 
-Phase 4 targets one channel (layers[0]).  Phase 5 will extend to multi-channel.
+Selection is per-channel: switching active channel preserves each channel's
+selection and restores the new channel's previous selection.
 """
 from __future__ import annotations
 
@@ -11,10 +12,15 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 
-from wombat.app.session import Session
 from wombat.app.undo import UndoStack
 from wombat.domain.action import Action, ActionList
 from wombat.domain.channel import Channel
+
+if __debug__:
+    from typing import TYPE_CHECKING
+    if TYPE_CHECKING:
+        from wombat.app.project import Project
+        from wombat.playback.player import VideoPlayer
 
 
 class EditorController(QObject):
@@ -22,27 +28,43 @@ class EditorController(QObject):
     selection_changed = Signal()
     history_changed = Signal()      # can_undo / can_redo may have changed
 
-    def __init__(self, session: Session, undo: UndoStack) -> None:
+    def __init__(
+        self,
+        project: Project,
+        player: VideoPlayer,
+        undo: UndoStack,
+    ) -> None:
         super().__init__()
-        self._session = session
+        self._project = project
+        self._player = player
         self._undo = undo
-        self._active_idx: int = 0           # index into session.channels
-        self._selection: frozenset[float] = frozenset()
+        self._active_idx: int = 0               # index into project.channels
+        self._selections: dict[int, frozenset[float]] = {}  # per-channel
         self._clipboard: list[Action] = []
         self._snap_to_frame: bool = False
         # gesture state
         self._pre_move_snapshot: ActionList = ActionList()
         self._pre_move_selection: frozenset[float] = frozenset()
 
+    # ----------------------------------------------------------------- project
+
+    def set_project(self, project: Project) -> None:
+        self._project = project
+        self._active_idx = 0
+        self._selections = {}
+        self._clipboard = []
+        self._pre_move_snapshot = ActionList()
+        self._pre_move_selection = frozenset()
+
     # ----------------------------------------------------------------- active
 
     @property
     def has_active_channel(self) -> bool:
-        return 0 <= self._active_idx < len(self._session.channels)
+        return 0 <= self._active_idx < len(self._project.channels)
 
     @property
     def active_channel(self) -> Channel:
-        return self._session.channels[self._active_idx]
+        return self._project.channels[self._active_idx]
 
     @property
     def active_layer_index(self) -> int:
@@ -50,7 +72,6 @@ class EditorController(QObject):
 
     def set_active_channel_index(self, index: int) -> None:
         self._active_idx = index
-        self._selection = frozenset()
         self.selection_changed.emit()
 
     def _layer(self) -> ActionList:
@@ -58,6 +79,15 @@ class EditorController(QObject):
 
     def _targets(self) -> list[tuple[Channel, int]]:
         return [(self.active_channel, self.active_layer_index)]
+
+    # ----------------------------------------------------------------- selection
+
+    @property
+    def selection(self) -> frozenset[float]:
+        return self._selections.get(self._active_idx, frozenset())
+
+    def _set_selection(self, s: frozenset[float]) -> None:
+        self._selections[self._active_idx] = s
 
     # ----------------------------------------------------------------- options
 
@@ -70,7 +100,7 @@ class EditorController(QObject):
         self._snap_to_frame = value
 
     def _snap(self, at: float) -> float:
-        ft = self._session.player.frame_time
+        ft = self._player.frame_time
         return round(at / ft) * ft if ft > 0 else at
 
     # ----------------------------------------------------------------- single edits
@@ -80,7 +110,7 @@ class EditorController(QObject):
             return
         if self._snap_to_frame:
             at = self._snap(at)
-        self._undo.snapshot("Add action", self._targets(), self._selection)
+        self._undo.snapshot("Add action", self._targets(), self.selection)
         self._layer().add(Action(at, pos))
         self.active_channel._invalidate_cache()
         self._emit_actions()
@@ -88,28 +118,28 @@ class EditorController(QObject):
     def remove_action(self, at: float) -> None:
         if not self.has_active_channel:
             return
-        self._undo.snapshot("Remove action", self._targets(), self._selection)
+        self._undo.snapshot("Remove action", self._targets(), self.selection)
         try:
             self._layer().remove_at(at)
         except ValueError:
             return
-        self._selection = self._selection - {at}
+        self._set_selection(self.selection - {at})
         self.active_channel._invalidate_cache()
         self._emit_actions()
         self.selection_changed.emit()
 
     def remove_selection(self) -> None:
         """Delete all selected actions in one undo step."""
-        if not self.has_active_channel or not self._selection:
+        if not self.has_active_channel or not self.selection:
             return
-        self._undo.snapshot("Delete selection", self._targets(), self._selection)
+        self._undo.snapshot("Delete selection", self._targets(), self.selection)
         layer = self._layer()
-        for at in list(self._selection):
+        for at in list(self.selection):
             try:
                 layer.remove_at(at)
             except ValueError:
                 pass
-        self._selection = frozenset()
+        self._set_selection(frozenset())
         self.active_channel._invalidate_cache()
         self._emit_actions()
         self.selection_changed.emit()
@@ -119,15 +149,15 @@ class EditorController(QObject):
             return
         if self._snap_to_frame:
             new_at = self._snap(new_at)
-        self._undo.snapshot("Edit action", self._targets(), self._selection)
+        self._undo.snapshot("Edit action", self._targets(), self.selection)
         layer = self._layer()
         try:
             layer.remove_at(old_at)
         except ValueError:
             pass
         layer.add(Action(new_at, new_pos))
-        if old_at in self._selection:
-            self._selection = (self._selection - {old_at}) | {new_at}
+        if old_at in self.selection:
+            self._set_selection((self.selection - {old_at}) | {new_at})
         self.active_channel._invalidate_cache()
         self._emit_actions()
 
@@ -138,9 +168,9 @@ class EditorController(QObject):
             return
         ch = self.active_channel
         li = self.active_layer_index
-        self._undo.begin("Move actions", [(ch, li)], self._selection)
+        self._undo.begin("Move actions", [(ch, li)], self.selection)
         self._pre_move_snapshot = ch.layers[li].actions.copy()
-        self._pre_move_selection = frozenset(self._selection)
+        self._pre_move_selection = frozenset(self.selection)
 
     def move_selection(self, d_seconds: float, d_pos: int) -> None:
         """Apply total delta from drag-start; call repeatedly during drag."""
@@ -162,7 +192,7 @@ class EditorController(QObject):
                 new_al.add(a)
         ch.layers[li].actions = new_al
         ch._invalidate_cache()
-        self._selection = frozenset(new_sel)
+        self._set_selection(frozenset(new_sel))
         self.actions_changed.emit()
         self.selection_changed.emit()
 
@@ -174,24 +204,20 @@ class EditorController(QObject):
 
     def cancel_move(self) -> None:
         self._undo.cancel()
-        self._selection = self._pre_move_selection
+        self._set_selection(self._pre_move_selection)
         self._pre_move_snapshot = ActionList()
         self._pre_move_selection = frozenset()
         self.actions_changed.emit()
         self.selection_changed.emit()
         self.history_changed.emit()
 
-    # ----------------------------------------------------------------- selection
-
-    @property
-    def selection(self) -> frozenset[float]:
-        return self._selection
+    # ----------------------------------------------------------------- selection ops
 
     def select(self, at: float, additive: bool = False) -> None:
         if additive:
-            self._selection = self._selection | {at}
+            self._set_selection(self.selection | {at})
         else:
-            self._selection = frozenset({at})
+            self._set_selection(frozenset({at}))
         self.selection_changed.emit()
 
     def select_time_range(self, t0: float, t1: float, additive: bool = False) -> None:
@@ -199,24 +225,24 @@ class EditorController(QObject):
             return
         lo, hi = self._layer().index_range(t0, t1)
         ats = frozenset(self._layer()[i].at for i in range(lo, hi))
-        self._selection = (self._selection | ats) if additive else ats
+        self._set_selection((self.selection | ats) if additive else ats)
         self.selection_changed.emit()
 
     def select_all(self) -> None:
         if not self.has_active_channel:
             return
-        self._selection = frozenset(a.at for a in self._layer())
+        self._set_selection(frozenset(a.at for a in self._layer()))
         self.selection_changed.emit()
 
     def clear_selection(self) -> None:
-        self._selection = frozenset()
+        self._set_selection(frozenset())
         self.selection_changed.emit()
 
     def invert_selection(self) -> None:
         if not self.has_active_channel:
             return
         all_ats = frozenset(a.at for a in self._layer())
-        self._selection = all_ats - self._selection
+        self._set_selection(all_ats - self.selection)
         self.selection_changed.emit()
 
     def select_top(self) -> None:
@@ -235,7 +261,7 @@ class EditorController(QObject):
         if not self.has_active_channel:
             return
         result = fn(self._layer())
-        self._selection = frozenset(a.at for a in result)
+        self._set_selection(frozenset(a.at for a in result))
         self.selection_changed.emit()
 
     # ----------------------------------------------------------------- transforms
@@ -262,11 +288,11 @@ class EditorController(QObject):
         layer_al = ch.layers[li].actions
         if not layer_al:
             return
-        self._undo.snapshot(desc, [(ch, li)], self._selection)
-        if self._selection:
-            sel_list = ActionList(a for a in layer_al if a.at in self._selection)
+        self._undo.snapshot(desc, [(ch, li)], self.selection)
+        if self.selection:
+            sel_list = ActionList(a for a in layer_al if a.at in self.selection)
             transformed = fn(sel_list)
-            new_al = ActionList(a for a in layer_al if a.at not in self._selection)
+            new_al = ActionList(a for a in layer_al if a.at not in self.selection)
             for a in transformed:
                 new_al.add(a)
             new_sel = frozenset(a.at for a in transformed)
@@ -275,17 +301,17 @@ class EditorController(QObject):
             new_sel = frozenset()
         ch.layers[li].actions = new_al
         ch._invalidate_cache()
-        self._selection = new_sel
+        self._set_selection(new_sel)
         self._emit_actions()
         self.selection_changed.emit()
 
     # ----------------------------------------------------------------- clipboard
 
     def copy(self) -> None:
-        if not self.has_active_channel or not self._selection:
+        if not self.has_active_channel or not self.selection:
             return
         self._clipboard = sorted(
-            (a for a in self._layer() if a.at in self._selection),
+            (a for a in self._layer() if a.at in self.selection),
             key=lambda a: a.at,
         )
 
@@ -298,7 +324,7 @@ class EditorController(QObject):
             return
         ch = self.active_channel
         li = self.active_layer_index
-        self._undo.snapshot("Paste", [(ch, li)], self._selection)
+        self._undo.snapshot("Paste", [(ch, li)], self.selection)
         t0 = self._clipboard[0].at
         new_ats: set[float] = set()
         for a in self._clipboard:
@@ -308,7 +334,7 @@ class EditorController(QObject):
             ch.layers[li].actions.add(Action(at, a.pos))
             new_ats.add(at)
         ch._invalidate_cache()
-        self._selection = frozenset(new_ats)
+        self._set_selection(frozenset(new_ats))
         self._emit_actions()
         self.selection_changed.emit()
 
@@ -317,30 +343,36 @@ class EditorController(QObject):
             return
         ch = self.active_channel
         li = self.active_layer_index
-        self._undo.snapshot("Paste exact", [(ch, li)], self._selection)
+        self._undo.snapshot("Paste exact", [(ch, li)], self.selection)
         new_ats: set[float] = set()
         for a in self._clipboard:
             ch.layers[li].actions.add(a)
             new_ats.add(a.at)
         ch._invalidate_cache()
-        self._selection = frozenset(new_ats)
+        self._set_selection(frozenset(new_ats))
         self._emit_actions()
         self.selection_changed.emit()
 
     # ----------------------------------------------------------------- history
 
     def undo(self) -> None:
-        entry = self._undo.undo(self._selection)
+        entry = self._undo.undo(self.selection)
         if entry is not None:
-            self._selection = entry.snapshots[0].selection
+            for snap in entry.snapshots:
+                ch_idx = self._channel_index(snap.channel)
+                if ch_idx is not None:
+                    self._selections[ch_idx] = snap.selection
             self._emit_actions()
             self.selection_changed.emit()
             self.history_changed.emit()
 
     def redo(self) -> None:
-        entry = self._undo.redo(self._selection)
+        entry = self._undo.redo(self.selection)
         if entry is not None:
-            self._selection = entry.snapshots[0].selection
+            for snap in entry.snapshots:
+                ch_idx = self._channel_index(snap.channel)
+                if ch_idx is not None:
+                    self._selections[ch_idx] = snap.selection
             self._emit_actions()
             self.selection_changed.emit()
             self.history_changed.emit()
@@ -354,6 +386,12 @@ class EditorController(QObject):
         return self._undo.can_redo
 
     # ----------------------------------------------------------------- helpers
+
+    def _channel_index(self, ch: Channel) -> int | None:
+        try:
+            return self._project.channels.index(ch)
+        except ValueError:
+            return None
 
     def _emit_actions(self) -> None:
         self.actions_changed.emit()

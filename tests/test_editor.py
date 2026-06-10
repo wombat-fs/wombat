@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 _app = QApplication.instance() or QApplication(sys.argv)
 
 from wombat.app.editor import EditorController  # noqa: E402
-from wombat.app.session import Session  # noqa: E402
+from wombat.app.project import Project  # noqa: E402
 from wombat.app.undo import UndoStack  # noqa: E402
 from wombat.domain.action import Action, ActionList  # noqa: E402
 from wombat.domain.channel import Channel, Layer  # noqa: E402, I001
@@ -33,9 +33,11 @@ def _channel(*pairs) -> Channel:
 
 def _editor(*pairs, fps: float = 30.0) -> tuple[EditorController, Channel]:
     ch = _channel(*pairs)
-    session = Session(player=_player_stub(fps), channels=[ch])
+    project = Project.new()
+    project.channels.append(ch)
+    player = _player_stub(fps)
     undo = UndoStack()
-    ed = EditorController(session, undo)
+    ed = EditorController(project, player, undo)
     return ed, ch
 
 
@@ -367,9 +369,10 @@ def test_synthesize_after_edit_reflects_new_state():
 # ------------------------------------------------------------------ no active channel guard
 
 def test_no_active_channel_is_noop():
-    session = Session(player=_player_stub(), channels=[])
+    project = Project.new()  # empty channels
+    player = _player_stub()
     undo = UndoStack()
-    ed = EditorController(session, undo)
+    ed = EditorController(project, player, undo)
     # These should not raise
     ed.add_action(1.0, 50)
     ed.remove_selection()
