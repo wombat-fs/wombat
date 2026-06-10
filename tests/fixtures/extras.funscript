@@ -1,0 +1,27 @@
+{
+  "version": "1.0",
+  "inverted": true,
+  "range": 100,
+  "injectedByOtherTool": "preserve-me",
+  "anotherExtraKey": 42,
+  "metadata": {
+    "type": "basic",
+    "title": "Extras Test",
+    "creator": "",
+    "scriptUrl": "",
+    "videoUrl": "",
+    "tags": [],
+    "performers": [],
+    "description": "",
+    "license": "",
+    "notes": "",
+    "duration": 3000,
+    "customMetaField": "also-preserve-me"
+  },
+  "actions": [
+    {"pos": 0, "at": 0},
+    {"pos": 100, "at": 1000},
+    {"pos": 0, "at": 2000},
+    {"pos": 100, "at": 3000}
+  ]
+}

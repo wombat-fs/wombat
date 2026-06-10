@@ -10,6 +10,7 @@ requires-python = ">=3.11"
 dependencies = [
     "PySide6",
     "python-mpv",
+    "numpy",
 ]
 
 [project.scripts]
