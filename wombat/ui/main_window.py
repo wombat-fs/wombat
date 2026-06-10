@@ -20,6 +20,7 @@ from wombat.domain.funscript_io import FunscriptError
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
 from wombat.app.autobackup import AutoBackupManager
+from wombat.audio.loader import WaveformLoader
 from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.channels_panel import ChannelsPanel
 from wombat.ui.device_simulator import SimulatorOverlay
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         self._recording_mode.set_context(self._editor, self._player)
 
         self._backup = AutoBackupManager()
+        self._waveform_loader = WaveformLoader(self)
 
         self._build_central()
         self._build_docks()
@@ -77,6 +79,10 @@ class MainWindow(QMainWindow):
         self._editor.actions_changed.connect(self._mark_dirty)
         self._editor.layer_structure_changed.connect(self._mark_dirty)
         self._editor.history_changed.connect(self._update_edit_menu)
+
+        # Waveform loader
+        self._player.video_loaded.connect(self._on_video_loaded_waveform)
+        self._waveform_loader.waveform_ready.connect(self._timeline.set_waveform)
 
     # ------------------------------------------------------------------ layout
 
@@ -306,6 +312,11 @@ class MainWindow(QMainWindow):
         heatmap_action.setCheckable(True)
         heatmap_action.toggled.connect(self._timeline.set_heatmap)
 
+        waveform_action = view_menu.addAction("Audio Waveform")
+        waveform_action.setCheckable(True)
+        waveform_action.setChecked(True)
+        waveform_action.toggled.connect(self._timeline.set_waveform_visible)
+
         view_menu.addSeparator()
 
         self._dark_theme_action = view_menu.addAction("Dark Theme")
@@ -480,6 +491,7 @@ class MainWindow(QMainWindow):
         self._settings.save_dock_state(self.saveState())
         self._backup.stop()
         self._backup.clear()
+        self._waveform_loader.cancel()
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
         super().closeEvent(event)
@@ -663,6 +675,12 @@ class MainWindow(QMainWindow):
         log.info("Exported %d funscripts to %s", len(written), out_dir)
 
     # ----------------------------------------------------------------- slots
+
+    @Slot(str)
+    def _on_video_loaded_waveform(self, path: str) -> None:
+        """Trigger background waveform extraction whenever a video is loaded."""
+        self._timeline.set_waveform(None)   # clear stale waveform immediately
+        self._waveform_loader.load(path)
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:

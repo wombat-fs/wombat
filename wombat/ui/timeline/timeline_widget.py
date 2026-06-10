@@ -77,6 +77,8 @@ _SPAN_BORDER = QColor(255, 255, 255, 70)
 _FADE_HANDLE = QColor(255, 200, 80, 200)
 _GHOST_ALPHA = 0.18
 _CHAPTER_COLOR = QColor(240, 192, 48, 220)   # gold, slightly transparent
+_WAVEFORM_FILL_ACTIVE = QColor(80, 180, 255, 55)
+_WAVEFORM_FILL_DIM    = QColor(80, 180, 255, 22)
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -176,6 +178,8 @@ class TimelineWidget(QWidget):
         self._follow: bool = True
         self._follow_fraction: float = 0.5
         self._show_heatmap: bool = False
+        self._show_waveform: bool = True
+        self._waveform = None   # WaveformData | None
 
         # editing state
         self._editor: EditorController | None = None
@@ -210,6 +214,15 @@ class TimelineWidget(QWidget):
 
     def set_heatmap(self, enabled: bool) -> None:
         self._show_heatmap = enabled
+        self.update()
+
+    def set_waveform(self, data) -> None:
+        """Set waveform data (WaveformData or None) and repaint."""
+        self._waveform = data
+        self.update()
+
+    def set_waveform_visible(self, visible: bool) -> None:
+        self._show_waveform = visible
         self.update()
 
     def set_editor(self, editor: EditorController) -> None:
@@ -779,6 +792,9 @@ class TimelineWidget(QWidget):
             y = int(lane_vp.pos_to_y(float(guide_pos)))
             painter.drawLine(0, y, self.width(), y)
 
+        # Waveform underlay (behind action graph)
+        self._draw_waveform(painter, lane, is_active_ch)
+
         # Expand/collapse toggle
         expand_char = "▼" if lane.ch_idx in self._expanded_channels else "▶"
         painter.setPen(_LABEL_FG)
@@ -1003,6 +1019,41 @@ class TimelineWidget(QWidget):
         painter.setPen(QPen(_RUBBER_BAND_BORDER, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(rect)
+
+    def _draw_waveform(self, painter: QPainter, lane: _LaneInfo, is_active: bool) -> None:
+        """Draw the audio waveform as a filled background underlay in one lane."""
+        if not self._show_waveform or self._waveform is None:
+            return
+        import numpy as np
+        w = self.width()
+        if w <= 0 or lane.height <= 0:
+            return
+
+        t0, t1 = self._viewport.time_window()
+        amplitudes = self._waveform.samples_for_range(t0, t1, w)
+
+        cy = (lane.top + lane.bottom) / 2.0
+        half_h = lane.height / 2.0 * 0.9   # 90% of half-height at amplitude=1
+
+        # Build filled polygon: top edge left→right, then bottom edge right→left.
+        # Using a QPolygonF with 2*w points (one per pixel column each side).
+        from PySide6.QtGui import QPolygonF
+        from PySide6.QtCore import QPointF
+
+        xs = np.arange(w, dtype=np.float64)
+        amps = amplitudes.astype(np.float64) * half_h
+        tops = cy - amps
+        bots = cy + amps
+
+        # Interleave into [x0,top0, x1,top1, ..., xN,botN, ..., x0,bot0]
+        top_pts = [QPointF(float(xs[i]), float(tops[i])) for i in range(w)]
+        bot_pts = [QPointF(float(xs[i]), float(bots[i])) for i in range(w - 1, -1, -1)]
+
+        poly = QPolygonF(top_pts + bot_pts)
+        fill = _WAVEFORM_FILL_ACTIVE if is_active else _WAVEFORM_FILL_DIM
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(fill)
+        painter.drawPolygon(poly)
 
     def _draw_chapter_markers(self, painter: QPainter) -> None:
         if self._project is None or not self._project.chapters:
