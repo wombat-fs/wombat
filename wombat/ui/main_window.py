@@ -36,6 +36,7 @@ class MainWindow(QMainWindow):
         self._undo = UndoStack()
         self._project = Project.new()
         self._editor = EditorController(self._project, self._player, self._undo)
+        self._loading_project: bool = False  # suppress _on_video_loaded during project load
 
         self._build_central()
         self._build_docks()
@@ -254,8 +255,9 @@ class MainWindow(QMainWindow):
         self._timeline.restore_view_state(proj.view.offset, proj.view.visible_time)
         # Sync editor to project's active channel
         self._editor.set_active_channel_index(proj.active_index)
-        # Load media if the path resolves
+        # Load media — set flag so _on_video_loaded skips the project-reset path
         if proj.media_path and Path(proj.media_path).exists():
+            self._loading_project = True
             self._player.load(proj.media_path)
         self._update_title()
         log.info("Loaded project: %s", path)
@@ -376,6 +378,12 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:
+        if self._loading_project:
+            # Media was loaded as part of opening a project — don't reset the project.
+            self._loading_project = False
+            self._update_title()
+            log.info("Media loaded for project: %s", path)
+            return
         new_project = Project.new(path)
         self._set_project(new_project)
         self._project.discover_and_load_siblings(path)
