@@ -32,6 +32,15 @@ def bootstrap() -> int:
     app.setApplicationName("Wombat")
     app.setOrganizationName("Wombat")
 
+    # Apply saved theme before creating any windows
+    from wombat.settings import AppSettings
+    from wombat.ui.theme import apply_dark_theme, apply_light_theme
+    _settings = AppSettings()
+    if _settings.load_dark_theme():
+        apply_dark_theme(app)
+    else:
+        apply_light_theme(app)
+
     from wombat.ui.main_window import MainWindow
 
     win = MainWindow()

@@ -19,6 +19,8 @@ from wombat.app.undo import UndoStack
 from wombat.domain.funscript_io import FunscriptError
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
+from wombat.app.autobackup import AutoBackupManager
+from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.channels_panel import ChannelsPanel
 from wombat.ui.device_simulator import SimulatorOverlay
 from wombat.ui.events_panel import EventsPanel
@@ -54,12 +56,16 @@ class MainWindow(QMainWindow):
         self._mode: ScriptingMode = DefaultMode()
         self._recording_mode.set_context(self._editor, self._player)
 
+        self._backup = AutoBackupManager()
+
         self._build_central()
         self._build_docks()
         self._build_menus()
         self._build_playback_shortcuts()
         self._restore_state()
         self._apply_stored_prefs()
+        self._check_recovery()
+        self._backup.start(lambda: self._project)
 
         # Project signals
         self._project.channels_changed.connect(self._on_channels_changed)
@@ -130,6 +136,14 @@ class MainWindow(QMainWindow):
 
         # Sync playhead position to events panel start time
         self._player.position_changed.connect(self._events_panel.sync_playhead)
+
+        self._chapters_panel = ChaptersPanel(self._project, self._player)
+        chapters_dock = QDockWidget("Chapters", self)
+        chapters_dock.setObjectName("chaptersDock")
+        chapters_dock.setWidget(self._chapters_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, chapters_dock)
+        self._chapters_dock = chapters_dock
+        self.tabifyDockWidget(events_dock, chapters_dock)
 
         # Recording panel — visible only when RecordingMode is active
         self._recording_panel = RecordingPanel(self._recording_mode)
@@ -228,6 +242,12 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        metadata_action = edit_menu.addAction("Channel Metadata…")
+        metadata_action.setToolTip("Edit export metadata for the active channel")
+        metadata_action.triggered.connect(self._show_metadata)
+
+        edit_menu.addSeparator()
+
         prefs_action = edit_menu.addAction("Preferences…")
         prefs_action.triggered.connect(self._show_preferences)
 
@@ -275,6 +295,7 @@ class MainWindow(QMainWindow):
         view_menu = mb.addMenu("&View")
         view_menu.addAction(self._timeline_dock.toggleViewAction())
         view_menu.addAction(self._channels_dock.toggleViewAction())
+        view_menu.addAction(self._chapters_dock.toggleViewAction())
 
         sim_action = view_menu.addAction("Device Simulator")
         sim_action.setCheckable(True)
@@ -284,6 +305,15 @@ class MainWindow(QMainWindow):
         heatmap_action = view_menu.addAction("Heatmap")
         heatmap_action.setCheckable(True)
         heatmap_action.toggled.connect(self._timeline.set_heatmap)
+
+        view_menu.addSeparator()
+
+        self._dark_theme_action = view_menu.addAction("Dark Theme")
+        self._dark_theme_action.setCheckable(True)
+        self._dark_theme_action.setChecked(self._settings.load_dark_theme())
+        self._dark_theme_action.toggled.connect(self._on_theme_toggled)
+
+        view_menu.addSeparator()
 
         self._snap_action = view_menu.addAction("Snap to Frame")
         self._snap_action.setCheckable(True)
@@ -309,6 +339,10 @@ class MainWindow(QMainWindow):
         _sc("frame_back",    lambda: self._player.step_frame(forward=False))
         _sc("seek_forward",  lambda: self._player.seek_relative(keybindings._SEEK_STEP))
         _sc("seek_back",     lambda: self._player.seek_relative(-keybindings._SEEK_STEP))
+
+        # Chapter navigation: [ = previous, ] = next
+        QShortcut(QKeySequence("["), self, self._seek_prev_chapter)
+        QShortcut(QKeySequence("]"), self, self._seek_next_chapter)
 
         # Action-insertion keys (1–9 = pos 10–90, 0 = 100, ` = 0).
         # Guarded: don't fire when a text-input widget has focus.
@@ -360,6 +394,55 @@ class MainWindow(QMainWindow):
         self._snap_action.setChecked(snap)
 
     @Slot()
+    def _show_metadata(self) -> None:
+        from wombat.ui.metadata_dialog import MetadataDialog
+        if not self._editor.has_active_channel:
+            return
+        ch = self._editor.active_channel
+        dlg = MetadataDialog(ch, parent=self)
+        if dlg.exec() == MetadataDialog.DialogCode.Accepted:
+            self._mark_dirty()
+
+    @Slot(bool)
+    def _on_theme_toggled(self, dark: bool) -> None:
+        from PySide6.QtWidgets import QApplication
+        from wombat.ui.theme import apply_dark_theme, apply_light_theme
+        app = QApplication.instance()
+        if dark:
+            apply_dark_theme(app)
+        else:
+            apply_light_theme(app)
+        self._settings.save_dark_theme(dark)
+
+    @Slot()
+    def _seek_prev_chapter(self) -> None:
+        ch = self._project.chapter_before(self._player.logical_time)
+        if ch is not None:
+            self._player.seek_exact(ch.at)
+
+    @Slot()
+    def _seek_next_chapter(self) -> None:
+        ch = self._project.chapter_after(self._player.logical_time)
+        if ch is not None:
+            self._player.seek_exact(ch.at)
+
+    def _check_recovery(self) -> None:
+        backups = self._backup.find_backups()
+        if not backups:
+            return
+        latest = backups[0]
+        resp = QMessageBox.question(
+            self,
+            "Crash Recovery",
+            f"An auto-backup was found from a previous session:\n{latest.name}\n\n"
+            "Restore it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if resp == QMessageBox.StandardButton.Yes:
+            self._load_project(str(latest))
+        self._backup.clear()
+
+    @Slot()
     def _show_preferences(self) -> None:
         dlg = PreferencesDialog(self._settings, parent=self)
         if dlg.exec() == PreferencesDialog.DialogCode.Accepted:
@@ -395,6 +478,8 @@ class MainWindow(QMainWindow):
         self._project.view.visible_time = vt
         self._settings.save_geometry(self.saveGeometry())
         self._settings.save_dock_state(self.saveState())
+        self._backup.stop()
+        self._backup.clear()
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
         super().closeEvent(event)
@@ -418,6 +503,7 @@ class MainWindow(QMainWindow):
         self._timeline.set_project(project)
         self._channels_panel.set_project(project)
         self._simulator.set_project(project)
+        self._chapters_panel.set_project(project)
 
         project.channels_changed.connect(self._on_channels_changed)
         project.active_changed.connect(self._on_active_changed)

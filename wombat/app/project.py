@@ -17,6 +17,7 @@ from PySide6.QtCore import QObject, Signal
 
 from wombat.domain.action import Action, ActionList
 from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
+from wombat.domain.chapter import Chapter
 from wombat.domain.funscript_io import FunscriptError, load_funscript, save_funscript
 
 PROJECT_VERSION = 1
@@ -32,6 +33,7 @@ class ViewState:
 class Project(QObject):
     channels_changed = Signal()
     active_changed = Signal(int)
+    chapters_changed = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -40,6 +42,7 @@ class Project(QObject):
         self.active_index: int = 0
         self.path: str | None = None
         self.view: ViewState = ViewState()
+        self.chapters: list[Chapter] = []
         self._dirty: bool = False
 
     # ----------------------------------------------------------------- lifecycle
@@ -136,6 +139,45 @@ class Project(QObject):
     def active_channel(self) -> Channel:
         return self.channels[self.active_index]
 
+    # ----------------------------------------------------------------- chapters
+
+    def add_chapter(
+        self,
+        at: float,
+        name: str = "",
+        end: float | None = None,
+    ) -> Chapter:
+        ch = Chapter(at=at, name=name, end=end)
+        self.chapters.append(ch)
+        self.chapters.sort()
+        self.chapters_changed.emit()
+        self.mark_dirty()
+        return ch
+
+    def remove_chapter(self, chapter: Chapter) -> None:
+        try:
+            self.chapters.remove(chapter)
+        except ValueError:
+            return
+        self.chapters_changed.emit()
+        self.mark_dirty()
+
+    def rename_chapter(self, chapter: Chapter, name: str) -> None:
+        if chapter in self.chapters:
+            chapter.name = name
+            self.chapters_changed.emit()
+            self.mark_dirty()
+
+    def chapter_before(self, t: float) -> Chapter | None:
+        """Last chapter strictly before t, or None."""
+        before = [c for c in self.chapters if c.at < t - 1e-6]
+        return before[-1] if before else None
+
+    def chapter_after(self, t: float) -> Chapter | None:
+        """First chapter strictly after t, or None."""
+        after = [c for c in self.chapters if c.at > t + 1e-6]
+        return after[0] if after else None
+
     # ----------------------------------------------------------------- multi-axis
 
     def discover_and_load_siblings(self, media_path: str) -> None:
@@ -216,6 +258,7 @@ class Project(QObject):
             "active_channel": self.active_index,
             "view": {"offset": self.view.offset, "visible_time": self.view.visible_time},
             "channels": [_channel_to_dict(ch) for ch in self.channels],
+            "chapters": [_chapter_to_dict(c) for c in self.chapters],
         }
 
     def _from_dict(self, data: dict, base_dir: Path) -> None:
@@ -234,6 +277,9 @@ class Project(QObject):
         self.channels = [_channel_from_dict(c) for c in data.get("channels", [])]
         idx = int(data.get("active_channel", 0))
         self.active_index = max(0, min(idx, max(0, len(self.channels) - 1)))
+        self.chapters = sorted(
+            _chapter_from_dict(c) for c in data.get("chapters", [])
+        )
 
 
 # ------------------------------------------------------------------ helpers
@@ -278,12 +324,60 @@ def _channel_to_dict(ch: Channel) -> dict:
         "name": ch.name,
         "enabled": ch.enabled,
         "layers": [_layer_to_dict(lay) for lay in ch.layers],
+        "metadata": _metadata_to_dict(ch.metadata),
     }
 
 
 def _channel_from_dict(d: dict) -> Channel:
+    from wombat.domain.funscript import FunscriptMetadata
     return Channel(
         name=str(d.get("name", "channel")),
         enabled=bool(d.get("enabled", True)),
         layers=[_layer_from_dict(lay) for lay in d.get("layers", [])],
+        metadata=_metadata_from_dict(d.get("metadata", {})),
+    )
+
+
+def _metadata_to_dict(m) -> dict:
+    return {
+        "title": m.title,
+        "creator": m.creator,
+        "description": m.description,
+        "tags": list(m.tags),
+        "performers": list(m.performers),
+        "script_url": m.script_url,
+        "video_url": m.video_url,
+        "license": m.license,
+        "notes": m.notes,
+    }
+
+
+def _metadata_from_dict(d: dict):
+    from wombat.domain.funscript import FunscriptMetadata
+    return FunscriptMetadata(
+        title=str(d.get("title", "")),
+        creator=str(d.get("creator", "")),
+        description=str(d.get("description", "")),
+        tags=list(d.get("tags", [])),
+        performers=list(d.get("performers", [])),
+        script_url=str(d.get("script_url", "")),
+        video_url=str(d.get("video_url", "")),
+        license=str(d.get("license", "")),
+        notes=str(d.get("notes", "")),
+    )
+
+
+def _chapter_to_dict(c: Chapter) -> dict:
+    d: dict = {"at": c.at, "name": c.name}
+    if c.end is not None:
+        d["end"] = c.end
+    return d
+
+
+def _chapter_from_dict(d: dict) -> Chapter:
+    end_raw = d.get("end")
+    return Chapter(
+        at=float(d["at"]),
+        name=str(d.get("name", "")),
+        end=float(end_raw) if end_raw is not None else None,
     )

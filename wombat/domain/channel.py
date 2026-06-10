@@ -13,7 +13,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from wombat.domain.action import ActionList
-from wombat.domain.funscript import Funscript, FunscriptMetadata
+from wombat.domain.funscript import Funscript, FunscriptMetadata as _FM
 
 if TYPE_CHECKING:
     from wombat.domain.synthesis import SynthesisParams
@@ -90,6 +90,7 @@ class Channel:
     name: str
     layers: list[Layer] = field(default_factory=list)   # layers[0] = base
     enabled: bool = True
+    metadata: _FM = field(default_factory=_FM)
     _synthesis_cache: dict = field(
         default_factory=dict, init=False, repr=False, compare=False
     )
@@ -126,7 +127,7 @@ class Channel:
 
     def to_funscript(
         self,
-        metadata: FunscriptMetadata | None = None,
+        metadata: _FM | None = None,
         version: str = "1.0",
         inverted: bool = False,
         range_: int = 100,
@@ -134,7 +135,7 @@ class Channel:
         """Export this channel to a Funscript DTO via synthesize()."""
         return Funscript(
             actions=self.synthesize(),
-            metadata=metadata or FunscriptMetadata(),
+            metadata=metadata if metadata is not None else self.metadata,
             version=version,
             inverted=inverted,
             range_=range_,

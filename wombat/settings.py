@@ -51,6 +51,13 @@ class AppSettings:
     def save_simplify_epsilon(self, v: float) -> None:
         self._qs.setValue("prefs/simplifyEpsilon", float(v))
 
+    def load_dark_theme(self) -> bool:
+        v = self._qs.value("prefs/darkTheme", True)
+        return v if isinstance(v, bool) else str(v).lower() != "false"
+
+    def save_dark_theme(self, v: bool) -> None:
+        self._qs.setValue("prefs/darkTheme", v)
+
     def get_synthesis_params(self):
         """Return a SynthesisParams built from stored preferences."""
         from wombat.domain.synthesis import SynthesisParams

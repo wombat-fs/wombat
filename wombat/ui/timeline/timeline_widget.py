@@ -76,6 +76,7 @@ _SPAN_FILL = QColor(255, 255, 255, 22)
 _SPAN_BORDER = QColor(255, 255, 255, 70)
 _FADE_HANDLE = QColor(255, 200, 80, 200)
 _GHOST_ALPHA = 0.18
+_CHAPTER_COLOR = QColor(240, 192, 48, 220)   # gold, slightly transparent
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -229,6 +230,7 @@ class TimelineWidget(QWidget):
             try:
                 self._project.channels_changed.disconnect(self._on_channels_changed)
                 self._project.active_changed.disconnect(self._on_active_changed)
+                self._project.chapters_changed.disconnect(self.update)
             except RuntimeError:
                 pass
         self._project = project
@@ -236,6 +238,7 @@ class TimelineWidget(QWidget):
         self._active_index = project.active_index
         project.channels_changed.connect(self._on_channels_changed)
         project.active_changed.connect(self._on_active_changed)
+        project.chapters_changed.connect(self.update)
         self.update()
 
     def set_scripting_mode(self, mode: ScriptingMode) -> None:
@@ -567,6 +570,37 @@ class TimelineWidget(QWidget):
         else:
             super().keyPressEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        y = event.pos().y()
+        if y < _RULER_H and self._project is not None:
+            from PySide6.QtWidgets import QMenu, QInputDialog
+            t = self._viewport.x_to_time(float(event.pos().x()))
+            t_label = _format_time(t, self._viewport.visible_time)
+            menu = QMenu(self)
+            add_act = menu.addAction(f"Add Chapter at {t_label}")
+            # Show delete option if there is a nearby chapter
+            near = self._chapter_near(t)
+            del_act = menu.addAction(f"Remove '{near.name or t_label}'") if near else None
+            chosen = menu.exec(event.globalPos())
+            if chosen is add_act:
+                name, ok = QInputDialog.getText(self, "Add Chapter", "Chapter name (optional):")
+                if ok:
+                    self._project.add_chapter(t, name=name.strip())
+            elif del_act is not None and chosen is del_act and near is not None:
+                self._project.remove_chapter(near)
+        else:
+            super().contextMenuEvent(event)
+
+    def _chapter_near(self, t: float, tol_px: float = 8.0):
+        """Return a chapter within tol pixels of t, or None."""
+        if self._project is None:
+            return None
+        tol_t = tol_px / self._viewport.width * self._viewport.visible_time if self._viewport.width else 0.01
+        for ch in self._project.chapters:
+            if abs(ch.at - t) <= tol_t:
+                return ch
+        return None
+
     # ----------------------------------------------------------------- lane geometry
 
     def _compute_lanes(self) -> list[_LaneInfo]:
@@ -722,6 +756,7 @@ class TimelineWidget(QWidget):
         if self._drag_mode == _DragMode.RUBBER_BAND:
             self._draw_rubber_band(painter)
 
+        self._draw_chapter_markers(painter)
         self._draw_playhead(painter)
         painter.end()
 
@@ -968,6 +1003,38 @@ class TimelineWidget(QWidget):
         painter.setPen(QPen(_RUBBER_BAND_BORDER, 1))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(rect)
+
+    def _draw_chapter_markers(self, painter: QPainter) -> None:
+        if self._project is None or not self._project.chapters:
+            return
+        from PySide6.QtCore import QPoint
+        from PySide6.QtGui import QPolygon
+        t0, t1 = self._viewport.time_window()
+        painter.save()
+        fm = painter.fontMetrics()
+        for ch in self._project.chapters:
+            if ch.at < t0 - 1.0 or ch.at > t1 + 1.0:
+                continue
+            x = int(self._viewport.time_to_x(ch.at))
+            if not (-4 <= x <= self.width() + 4):
+                continue
+            # Downward triangle in the ruler strip
+            tri = QPolygon([QPoint(x - 5, 1), QPoint(x + 5, 1), QPoint(x, _RULER_H - 3)])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_CHAPTER_COLOR)
+            painter.drawPolygon(tri)
+            # Thin vertical line through the lane area
+            painter.setPen(QPen(_CHAPTER_COLOR, 1, Qt.PenStyle.DashLine))
+            painter.drawLine(x, _RULER_H, x, self.height())
+            # Label
+            if ch.name:
+                painter.setPen(QPen(_CHAPTER_COLOR, 1))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                label_x = x + 4
+                if label_x + fm.horizontalAdvance(ch.name) > self.width():
+                    label_x = x - 4 - fm.horizontalAdvance(ch.name)
+                painter.drawText(label_x, _RULER_H - 4, ch.name)
+        painter.restore()
 
     def _draw_playhead(self, painter: QPainter) -> None:
         x = int(self._viewport.time_to_x(self._playhead_time))
