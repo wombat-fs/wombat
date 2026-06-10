@@ -11,6 +11,7 @@ dependencies = [
     "PySide6",
     "python-mpv",
     "numpy",
+    "PyYAML",
 ]
 
 [project.scripts]

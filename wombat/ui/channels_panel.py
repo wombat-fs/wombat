@@ -1,10 +1,9 @@
-"""ChannelsPanel — right-dock channel list.
+"""ChannelsPanel — channel→layer tree dock.
 
-Shows one row per channel with an enabled checkbox, active indicator,
-and buttons for add / import / remove / rename / reorder.
+Top level: one item per channel (enabled checkbox, active indicator, name).
+Second level: one item per layer (enabled checkbox, blend badge, active indicator, name).
 
-The panel drives the Project only — activation flows via project signals
-back to MainWindow → EditorController.
+Channel ops drive Project directly; layer ops drive EditorController.
 """
 from __future__ import annotations
 
@@ -16,72 +15,124 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
-    QListWidget,
-    QListWidgetItem,
     QMenu,
     QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 if TYPE_CHECKING:
+    from wombat.app.editor import EditorController
     from wombat.app.project import Project
+    from wombat.domain.channel import BlendMode
 
 _PRESET_NAMES = ["orig", "alpha", "beta", "volume", "frequency", "pulse-width", "pulse-rise"]
-_ACTIVE_COLOR = QColor("#00a8e8")
+
+_ACTIVE_CH_COLOR = QColor("#00a8e8")
 _INACTIVE_COLOR = QColor("#aaaaaa")
+_ACTIVE_LAYER_COLOR = QColor("#00e8a8")
+_BLEND_OVERRIDE = "OVR"
+_BLEND_ADDITIVE = "ADD"
+
+# TreeWidgetItem user roles
+_ROLE_CH_IDX = Qt.ItemDataRole.UserRole
+_ROLE_LAYER_IDX = Qt.ItemDataRole.UserRole + 1
 
 
 class ChannelsPanel(QWidget):
-    def __init__(self, project: Project, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        project: Project,
+        editor: EditorController | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._project = project
+        self._editor = editor
+        self._refreshing = False
 
-        # Toolbar buttons
-        self._btn_add = QPushButton("+")
-        self._btn_add.setToolTip("Add channel")
-        self._btn_add.setFixedWidth(28)
+        # Channel toolbar
+        self._btn_add_ch = QPushButton("+")
+        self._btn_add_ch.setToolTip("Add channel")
+        self._btn_add_ch.setFixedWidth(28)
         btn_import = QPushButton("Import…")
         btn_import.setToolTip("Import funscript as channel")
-        self._btn_remove = QPushButton("−")
-        self._btn_remove.setToolTip("Remove selected channel")
-        self._btn_remove.setFixedWidth(28)
-        self._btn_up = QPushButton("↑")
-        self._btn_up.setToolTip("Move channel up")
-        self._btn_up.setFixedWidth(28)
-        self._btn_down = QPushButton("↓")
-        self._btn_down.setToolTip("Move channel down")
-        self._btn_down.setFixedWidth(28)
+        self._btn_remove_ch = QPushButton("−")
+        self._btn_remove_ch.setToolTip("Remove selected channel")
+        self._btn_remove_ch.setFixedWidth(28)
+        self._btn_ch_up = QPushButton("↑")
+        self._btn_ch_up.setFixedWidth(28)
+        self._btn_ch_down = QPushButton("↓")
+        self._btn_ch_down.setFixedWidth(28)
 
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.addWidget(self._btn_add)
-        btn_row.addWidget(btn_import)
-        btn_row.addWidget(self._btn_remove)
-        btn_row.addStretch()
-        btn_row.addWidget(self._btn_up)
-        btn_row.addWidget(self._btn_down)
+        ch_row = QHBoxLayout()
+        ch_row.setContentsMargins(0, 0, 0, 0)
+        ch_row.addWidget(self._btn_add_ch)
+        ch_row.addWidget(btn_import)
+        ch_row.addWidget(self._btn_remove_ch)
+        ch_row.addStretch()
+        ch_row.addWidget(self._btn_ch_up)
+        ch_row.addWidget(self._btn_ch_down)
 
-        self._list = QListWidget()
-        self._list.setAlternatingRowColors(False)
+        # Layer toolbar
+        self._btn_add_layer = QPushButton("+ Layer")
+        self._btn_add_layer.setToolTip("Add layer to active channel")
+        self._btn_dup_layer = QPushButton("Dup")
+        self._btn_dup_layer.setToolTip("Duplicate selected layer")
+        self._btn_remove_layer = QPushButton("− Layer")
+        self._btn_remove_layer.setToolTip("Remove selected layer")
+        self._btn_layer_up = QPushButton("↑")
+        self._btn_layer_up.setFixedWidth(28)
+        self._btn_layer_down = QPushButton("↓")
+        self._btn_layer_down.setFixedWidth(28)
+
+        layer_row = QHBoxLayout()
+        layer_row.setContentsMargins(0, 0, 0, 0)
+        layer_row.addWidget(self._btn_add_layer)
+        layer_row.addWidget(self._btn_dup_layer)
+        layer_row.addWidget(self._btn_remove_layer)
+        layer_row.addStretch()
+        layer_row.addWidget(self._btn_layer_up)
+        layer_row.addWidget(self._btn_layer_down)
+
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.setColumnCount(1)
+        self._tree.setAlternatingRowColors(False)
+        self._tree.setIndentation(16)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
-        layout.addLayout(btn_row)
-        layout.addWidget(self._list)
+        layout.setSpacing(2)
+        layout.addLayout(ch_row)
+        layout.addLayout(layer_row)
+        layout.addWidget(self._tree)
 
-        self._btn_add.clicked.connect(self._add_channel)
+        # channel buttons
+        self._btn_add_ch.clicked.connect(self._add_channel)
         btn_import.clicked.connect(self._import_channel)
-        self._btn_remove.clicked.connect(self._remove_channel)
-        self._btn_up.clicked.connect(self._move_up)
-        self._btn_down.clicked.connect(self._move_down)
-        self._list.currentRowChanged.connect(self._on_row_changed)
-        self._list.itemChanged.connect(self._on_item_changed)
-        self._list.itemDoubleClicked.connect(self._on_rename_requested)
+        self._btn_remove_ch.clicked.connect(self._remove_channel)
+        self._btn_ch_up.clicked.connect(self._move_ch_up)
+        self._btn_ch_down.clicked.connect(self._move_ch_down)
+
+        # layer buttons
+        self._btn_add_layer.clicked.connect(self._add_layer)
+        self._btn_dup_layer.clicked.connect(self._dup_layer)
+        self._btn_remove_layer.clicked.connect(self._remove_layer)
+        self._btn_layer_up.clicked.connect(self._move_layer_up)
+        self._btn_layer_down.clicked.connect(self._move_layer_down)
+
+        self._tree.currentItemChanged.connect(self._on_current_changed)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        self._tree.itemDoubleClicked.connect(self._on_double_click)
 
         project.channels_changed.connect(self._refresh)
-        project.active_changed.connect(self._on_active_changed)
+        project.active_changed.connect(self._on_active_channel_changed)
+        if editor is not None:
+            editor.layer_structure_changed.connect(self._refresh)
+
         self._refresh()
 
     # ----------------------------------------------------------------- project swap
@@ -89,78 +140,195 @@ class ChannelsPanel(QWidget):
     def set_project(self, project: Project) -> None:
         try:
             self._project.channels_changed.disconnect(self._refresh)
-            self._project.active_changed.disconnect(self._on_active_changed)
+            self._project.active_changed.disconnect(self._on_active_channel_changed)
         except RuntimeError:
             pass
         self._project = project
         project.channels_changed.connect(self._refresh)
-        project.active_changed.connect(self._on_active_changed)
+        project.active_changed.connect(self._on_active_channel_changed)
         self._refresh()
 
-    # ----------------------------------------------------------------- list management
+    def set_editor(self, editor: EditorController) -> None:
+        if self._editor is not None:
+            try:
+                self._editor.layer_structure_changed.disconnect(self._refresh)
+            except RuntimeError:
+                pass
+        self._editor = editor
+        editor.layer_structure_changed.connect(self._refresh)
+
+    # ----------------------------------------------------------------- tree build
 
     @Slot()
     def _refresh(self) -> None:
-        self._list.blockSignals(True)
-        self._list.clear()
-        for i, ch in enumerate(self._project.channels):
-            item = QListWidgetItem(ch.name)
-            item.setFlags(
-                item.flags()
+        self._refreshing = True
+        self._tree.blockSignals(True)
+
+        # Preserve expanded state and current selection
+        expanded: set[int] = set()
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item is not None and item.isExpanded():
+                expanded.add(i)
+
+        self._tree.clear()
+
+        active_ch = self._project.active_index
+        active_li = self._editor.active_layer_index if self._editor else 0
+
+        for ci, ch in enumerate(self._project.channels):
+            blend_text = f"[{'✓' if ch.enabled else '✗'}] {ch.name}"
+            ch_item = QTreeWidgetItem([ch.name])
+            ch_item.setFlags(
+                ch_item.flags()
                 | Qt.ItemFlag.ItemIsUserCheckable
                 | Qt.ItemFlag.ItemIsEnabled
             )
-            item.setCheckState(
-                Qt.CheckState.Checked if ch.enabled else Qt.CheckState.Unchecked
+            ch_item.setCheckState(
+                0,
+                Qt.CheckState.Checked if ch.enabled else Qt.CheckState.Unchecked,
             )
-            color = _ACTIVE_COLOR if i == self._project.active_index else _INACTIVE_COLOR
-            item.setForeground(color)
-            self._list.addItem(item)
-        if 0 <= self._project.active_index < self._list.count():
-            self._list.setCurrentRow(self._project.active_index)
-        self._list.blockSignals(False)
+            color = _ACTIVE_CH_COLOR if ci == active_ch else _INACTIVE_COLOR
+            ch_item.setForeground(0, color)
+            ch_item.setData(0, _ROLE_CH_IDX, ci)
+            ch_item.setData(0, _ROLE_LAYER_IDX, -1)
+            self._tree.addTopLevelItem(ch_item)
+
+            for li, layer in enumerate(ch.layers):
+                from wombat.domain.channel import BlendMode
+                blend_badge = (
+                    _BLEND_ADDITIVE
+                    if layer.blend == BlendMode.ADDITIVE
+                    else _BLEND_OVERRIDE
+                )
+                label = f"  {blend_badge}  {layer.name}"
+                l_item = QTreeWidgetItem([label])
+                l_item.setFlags(
+                    l_item.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                l_item.setCheckState(
+                    0,
+                    Qt.CheckState.Checked if layer.enabled else Qt.CheckState.Unchecked,
+                )
+                is_active_layer = (ci == active_ch) and (li == active_li)
+                l_color = _ACTIVE_LAYER_COLOR if is_active_layer else _INACTIVE_COLOR
+                l_item.setForeground(0, l_color)
+                l_item.setData(0, _ROLE_CH_IDX, ci)
+                l_item.setData(0, _ROLE_LAYER_IDX, li)
+                ch_item.addChild(l_item)
+
+            if ci in expanded or ci == active_ch:
+                ch_item.setExpanded(True)
+
+        # Restore current selection
+        self._select_active_item(active_ch, active_li)
+
+        self._tree.blockSignals(False)
+        self._refreshing = False
         self._update_button_states()
+
+    def _select_active_item(self, ch_idx: int, layer_idx: int) -> None:
+        for i in range(self._tree.topLevelItemCount()):
+            ch_item = self._tree.topLevelItem(i)
+            if ch_item is None:
+                continue
+            if ch_item.data(0, _ROLE_CH_IDX) == ch_idx:
+                # Try to find the active layer item
+                for j in range(ch_item.childCount()):
+                    l_item = ch_item.child(j)
+                    if l_item and l_item.data(0, _ROLE_LAYER_IDX) == layer_idx:
+                        self._tree.setCurrentItem(l_item)
+                        return
+                self._tree.setCurrentItem(ch_item)
+                return
 
     def _update_button_states(self) -> None:
-        n = len(self._project.channels)
-        row = self._list.currentRow()
-        self._btn_remove.setEnabled(n > 0 and row >= 0)
-        self._btn_up.setEnabled(row > 0)
-        self._btn_down.setEnabled(0 <= row < n - 1)
+        has_ch = len(self._project.channels) > 0
+        has_editor = self._editor is not None
+        item = self._tree.currentItem()
+        is_ch = item is not None and item.data(0, _ROLE_LAYER_IDX) == -1
+        is_layer = item is not None and item.data(0, _ROLE_LAYER_IDX) >= 0
 
-    @Slot(int)
-    def _on_row_changed(self, row: int) -> None:
-        if row >= 0 and row < len(self._project.channels):
-            self._project.set_active(row)
+        ci = item.data(0, _ROLE_CH_IDX) if item else -1
+        li = item.data(0, _ROLE_LAYER_IDX) if item else -1
+        n_ch = len(self._project.channels)
+        n_layers = len(self._project.channels[ci].layers) if 0 <= ci < n_ch else 0
+
+        self._btn_remove_ch.setEnabled(has_ch and is_ch)
+        self._btn_ch_up.setEnabled(is_ch and ci > 0)
+        self._btn_ch_down.setEnabled(is_ch and 0 <= ci < n_ch - 1)
+
+        self._btn_add_layer.setEnabled(has_editor and has_ch)
+        self._btn_dup_layer.setEnabled(has_editor and is_layer)
+        self._btn_remove_layer.setEnabled(has_editor and is_layer and n_layers > 1)
+        self._btn_layer_up.setEnabled(has_editor and is_layer and li > 0)
+        self._btn_layer_down.setEnabled(has_editor and is_layer and 0 <= li < n_layers - 1)
+
+    # ----------------------------------------------------------------- signals
+
+    @Slot(object, object)
+    def _on_current_changed(
+        self, current: QTreeWidgetItem | None, _prev: QTreeWidgetItem | None
+    ) -> None:
+        if self._refreshing or current is None:
+            return
+        ci = current.data(0, _ROLE_CH_IDX)
+        li = current.data(0, _ROLE_LAYER_IDX)
+        if not (0 <= ci < len(self._project.channels)):
+            return
+        if ci != self._project.active_index:
+            self._project.set_active(ci)
+        if li >= 0 and self._editor is not None:
+            self._editor.set_active_layer_index(li)
         self._update_button_states()
 
     @Slot(int)
-    def _on_active_changed(self, index: int) -> None:
+    def _on_active_channel_changed(self, _index: int) -> None:
         self._refresh()
 
-    @Slot(QListWidgetItem)
-    def _on_item_changed(self, item: QListWidgetItem) -> None:
-        row = self._list.row(item)
-        if not (0 <= row < len(self._project.channels)):
+    @Slot(QTreeWidgetItem)
+    def _on_item_changed(self, item: QTreeWidgetItem) -> None:
+        if self._refreshing:
             return
-        ch = self._project.channels[row]
-        enabled = item.checkState() == Qt.CheckState.Checked
-        if enabled != ch.enabled:
-            ch.enabled = enabled
-
-    @Slot(QListWidgetItem)
-    def _on_rename_requested(self, item: QListWidgetItem) -> None:
-        row = self._list.row(item)
-        if not (0 <= row < len(self._project.channels)):
+        ci = item.data(0, _ROLE_CH_IDX)
+        li = item.data(0, _ROLE_LAYER_IDX)
+        if not (0 <= ci < len(self._project.channels)):
             return
-        old_name = self._project.channels[row].name
-        new_name, ok = QInputDialog.getText(
-            self, "Rename Channel", "Channel name:", text=old_name
-        )
-        if ok and new_name.strip() and new_name.strip() != old_name:
-            self._project.rename_channel(row, new_name.strip())
+        enabled = item.checkState(0) == Qt.CheckState.Checked
+        ch = self._project.channels[ci]
+        if li == -1:
+            if enabled != ch.enabled:
+                ch.enabled = enabled
+        else:
+            if 0 <= li < len(ch.layers) and self._editor is not None:
+                if enabled != ch.layers[li].enabled:
+                    self._editor.set_layer_enabled(li, enabled)
 
-    # ----------------------------------------------------------------- buttons
+    @Slot(QTreeWidgetItem, int)
+    def _on_double_click(self, item: QTreeWidgetItem, _col: int) -> None:
+        ci = item.data(0, _ROLE_CH_IDX)
+        li = item.data(0, _ROLE_LAYER_IDX)
+        if not (0 <= ci < len(self._project.channels)):
+            return
+        ch = self._project.channels[ci]
+        if li == -1:
+            old_name = ch.name
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Channel", "Channel name:", text=old_name
+            )
+            if ok and new_name.strip() and new_name.strip() != old_name:
+                self._project.rename_channel(ci, new_name.strip())
+        elif 0 <= li < len(ch.layers) and self._editor is not None:
+            old_name = ch.layers[li].name
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Layer", "Layer name:", text=old_name
+            )
+            if ok and new_name.strip() and new_name.strip() != old_name:
+                self._editor.rename_layer(li, new_name.strip())
+
+    # ----------------------------------------------------------------- channel buttons
 
     @Slot()
     def _add_channel(self) -> None:
@@ -169,7 +337,7 @@ class ChannelsPanel(QWidget):
             menu.addAction(name)
         menu.addSeparator()
         custom_action = menu.addAction("Custom…")
-        action = menu.exec(self.mapToGlobal(self._btn_add.rect().bottomLeft()))
+        action = menu.exec(self.mapToGlobal(self._btn_add_ch.rect().bottomLeft()))
         if action is None:
             return
         if action is custom_action:
@@ -185,9 +353,7 @@ class ChannelsPanel(QWidget):
     @Slot()
     def _import_channel(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Import Funscript",
-            "",
+            self, "Import Funscript", "",
             "Funscript Files (*.funscript);;All Files (*)",
         )
         if path:
@@ -196,19 +362,78 @@ class ChannelsPanel(QWidget):
 
     @Slot()
     def _remove_channel(self) -> None:
-        row = self._list.currentRow()
-        if row >= 0:
-            self._project.remove_channel(row)
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        ci = item.data(0, _ROLE_CH_IDX)
+        if 0 <= ci < len(self._project.channels):
+            self._project.remove_channel(ci)
 
     @Slot()
-    def _move_up(self) -> None:
-        row = self._list.currentRow()
-        if row > 0:
-            self._project.move_channel(row, row - 1)
+    def _move_ch_up(self) -> None:
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        ci = item.data(0, _ROLE_CH_IDX)
+        if ci > 0:
+            self._project.move_channel(ci, ci - 1)
 
     @Slot()
-    def _move_down(self) -> None:
-        row = self._list.currentRow()
-        n = len(self._project.channels)
-        if 0 <= row < n - 1:
-            self._project.move_channel(row, row + 1)
+    def _move_ch_down(self) -> None:
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        ci = item.data(0, _ROLE_CH_IDX)
+        if 0 <= ci < len(self._project.channels) - 1:
+            self._project.move_channel(ci, ci + 1)
+
+    # ----------------------------------------------------------------- layer buttons
+
+    def _active_ci_li(self) -> tuple[int, int]:
+        """Return (channel_idx, layer_idx) for the currently selected item."""
+        item = self._tree.currentItem()
+        if item is None:
+            return self._project.active_index, self._editor.active_layer_index if self._editor else 0
+        ci = item.data(0, _ROLE_CH_IDX)
+        li = item.data(0, _ROLE_LAYER_IDX)
+        if li == -1:
+            li = 0
+        return ci, li
+
+    @Slot()
+    def _add_layer(self) -> None:
+        if self._editor is None:
+            return
+        self._editor.add_layer()
+
+    @Slot()
+    def _dup_layer(self) -> None:
+        if self._editor is None:
+            return
+        _ci, li = self._active_ci_li()
+        self._editor.duplicate_layer(li)
+
+    @Slot()
+    def _remove_layer(self) -> None:
+        if self._editor is None:
+            return
+        _ci, li = self._active_ci_li()
+        self._editor.remove_layer(li)
+
+    @Slot()
+    def _move_layer_up(self) -> None:
+        if self._editor is None:
+            return
+        _ci, li = self._active_ci_li()
+        if li > 0:
+            self._editor.reorder_layer(li, li - 1)
+
+    @Slot()
+    def _move_layer_down(self) -> None:
+        if self._editor is None:
+            return
+        ch_idx, li = self._active_ci_li()
+        if 0 <= ch_idx < len(self._project.channels):
+            n = len(self._project.channels[ch_idx].layers)
+            if li < n - 1:
+                self._editor.reorder_layer(li, li + 1)

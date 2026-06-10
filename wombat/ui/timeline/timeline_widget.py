@@ -15,11 +15,14 @@ Mouse interactions (requires EditorController via set_editor()):
   Left-click action node  → select (Shift/Ctrl = additive)
   Left-drag action node   → move selection as one undo step
   Ruler click             → seek
+  Click expand toggle     → expand/collapse channel to show layer sub-lanes
+  Drag span edge          → resize layer span
+  Drag fade handle        → adjust layer fade-in or fade-out
 """
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -51,8 +54,10 @@ if TYPE_CHECKING:
 
 _RULER_H = 24
 _POINT_R = 3
-_SEL_R = 5            # selected node radius
-_DRAG_THRESHOLD = 4   # pixels before a press becomes a rubber-band drag
+_SEL_R = 5
+_DRAG_THRESHOLD = 4       # px before press becomes rubber-band
+_HANDLE_TOL = 8           # px hit tolerance for span/fade handles
+_EXPAND_BTN_W = 16        # width of the ▶/▼ expand button zone
 
 _BG = QColor("#1c1c1c")
 _RULER_BG = QColor("#2a2a2a")
@@ -64,8 +69,13 @@ _SEL_COLOR = QColor("#ffffff")
 _RUBBER_BAND_FILL = QColor(255, 255, 255, 20)
 _RUBBER_BAND_BORDER = QColor(255, 255, 255, 120)
 _ACTIVE_BORDER = QColor(255, 255, 255, 40)
-_GRID_LINE = QColor(255, 255, 255, 14)   # subtle vertical time grid
-_T0_LINE = QColor(255, 255, 255, 90)     # solid t=0 marker
+_GRID_LINE = QColor(255, 255, 255, 14)
+_T0_LINE = QColor(255, 255, 255, 90)
+_SUBLANE_BG = QColor(255, 255, 255, 6)
+_SPAN_FILL = QColor(255, 255, 255, 22)
+_SPAN_BORDER = QColor(255, 255, 255, 70)
+_FADE_HANDLE = QColor(255, 200, 80, 200)
+_GHOST_ALPHA = 0.18
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -108,13 +118,41 @@ def _dim_color(c: QColor, factor: float) -> QColor:
     return QColor(int(c.red() * factor), int(c.green() * factor), int(c.blue() * factor))
 
 
+def _alpha_color(c: QColor, alpha: float) -> QColor:
+    out = QColor(c)
+    out.setAlphaF(alpha)
+    return out
+
+
+# ------------------------------------------------------------------ lane geometry
+
+@dataclass
+class _LaneInfo:
+    ch_idx: int
+    layer_idx: int   # -1 = channel composite summary lane
+    top: int
+    height: int
+
+    @property
+    def is_channel(self) -> bool:
+        return self.layer_idx == -1
+
+    @property
+    def bottom(self) -> int:
+        return self.top + self.height
+
+
 # ------------------------------------------------------------------ drag state
 
 class _DragMode(Enum):
     NONE = auto()
-    PENDING = auto()      # pressed on empty area; waiting to see click vs drag
+    PENDING = auto()
     RUBBER_BAND = auto()
     MOVE = auto()
+    SPAN_START = auto()   # dragging layer span left edge
+    SPAN_END = auto()     # dragging layer span right edge
+    FADE_IN = auto()      # dragging fade-in handle
+    FADE_OUT = auto()     # dragging fade-out handle
 
 
 # ------------------------------------------------------------------ widget
@@ -146,9 +184,15 @@ class TimelineWidget(QWidget):
         self._drag_mode: _DragMode = _DragMode.NONE
         self._drag_start: QPointF = QPointF()
         self._drag_current: QPointF = QPointF()
-        # for move gesture: total delta is computed vs press position
         self._move_press_t: float = 0.0
         self._move_press_p: float = 0.0
+        # for span/fade drags:
+        self._drag_target_layer: int = 0   # layer_idx being dragged
+        self._drag_span_anchor: float = 0.0  # the fixed edge of the span
+        self._drag_initial_fade: float = 0.0
+
+        # expand/collapse state
+        self._expanded_channels: set[int] = set()
 
         self.setMinimumHeight(60)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -171,9 +215,14 @@ class TimelineWidget(QWidget):
         if self._editor is not None:
             self._editor.actions_changed.disconnect(self.update)
             self._editor.selection_changed.disconnect(self.update)
+            try:
+                self._editor.layer_structure_changed.disconnect(self.update)
+            except RuntimeError:
+                pass
         self._editor = editor
         editor.actions_changed.connect(self.update)
         editor.selection_changed.connect(self.update)
+        editor.layer_structure_changed.connect(self.update)
 
     def set_project(self, project: Project) -> None:
         if self._project is not None:
@@ -267,21 +316,79 @@ class TimelineWidget(QWidget):
             event.accept()
             return
 
-        # Determine which lane was clicked
-        lane_idx = self._lane_at_y(y)
-
-        # Click on inactive lane → activate it; no edit
-        if lane_idx != self._active_index and self._project is not None and len(self._channels) > 1:
-            self._project.set_active(lane_idx)
-            self._follow = False
+        lanes = self._compute_lanes()
+        lane = self._lane_at(x, y, lanes)
+        if lane is None:
             event.accept()
             return
+
+        # Expand/collapse toggle in channel summary lane
+        if lane.is_channel and x <= _EXPAND_BTN_W + 4:
+            self._toggle_expand(lane.ch_idx)
+            event.accept()
+            return
+
+        # Activate channel on click
+        if lane.ch_idx != self._active_index and self._project is not None:
+            self._project.set_active(lane.ch_idx)
+            self._follow = False
+            # Also set active layer if clicking a layer sub-lane
+            if not lane.is_channel and self._editor is not None:
+                self._editor.set_active_layer_index(lane.layer_idx)
+            event.accept()
+            return
+
+        # Layer sub-lane interactions
+        if not lane.is_channel and self._editor is not None:
+            if lane.layer_idx != self._editor.active_layer_index:
+                self._editor.set_active_layer_index(lane.layer_idx)
+
+            ch = self._channels[lane.ch_idx]
+            li = lane.layer_idx
+            if 0 <= li < len(ch.layers):
+                layer = ch.layers[li]
+                lane_vp = self._lane_viewport(lane)
+                t = lane_vp.x_to_time(x)
+
+                # Check for span/fade handle hits
+                handle = self._hit_span_handle(x, layer, lane_vp)
+                if handle is not None:
+                    assert layer.span is not None
+                    if handle == "span_start":
+                        self._editor.begin_span_drag(li)
+                        self._drag_mode = _DragMode.SPAN_START
+                        self._drag_span_anchor = layer.span[1]
+                    elif handle == "span_end":
+                        self._editor.begin_span_drag(li)
+                        self._drag_mode = _DragMode.SPAN_END
+                        self._drag_span_anchor = layer.span[0]
+                    elif handle == "fade_in":
+                        self._editor.begin_fade_drag(li)
+                        self._drag_mode = _DragMode.FADE_IN
+                        self._drag_initial_fade = layer.fade_in
+                        self._drag_span_anchor = layer.span[0]  # span start
+                    elif handle == "fade_out":
+                        self._editor.begin_fade_drag(li)
+                        self._drag_mode = _DragMode.FADE_OUT
+                        self._drag_initial_fade = layer.fade_out
+                        self._drag_span_anchor = layer.span[1]  # span end
+                    self._drag_target_layer = li
+                    self._drag_start = event.position()
+                    self._drag_current = event.position()
+                    self._follow = False
+                    event.accept()
+                    return
 
         if self._editor is None or not self._editor.has_active_channel:
             event.accept()
             return
 
-        lane_vp = self._active_lane_vp()
+        active_lane = self._active_lane(lanes)
+        if active_lane is None:
+            event.accept()
+            return
+
+        lane_vp = self._lane_viewport(active_lane)
         t = lane_vp.x_to_time(x)
         p_at_y = lane_vp.y_to_pos(y)
 
@@ -292,7 +399,6 @@ class TimelineWidget(QWidget):
         )
 
         if hit is not None:
-            # Select + start move drag
             if hit.at not in self._editor.selection or not additive:
                 self._editor.select(hit.at, additive=additive)
             self._drag_mode = _DragMode.MOVE
@@ -302,7 +408,6 @@ class TimelineWidget(QWidget):
             self._move_press_p = p_at_y
             self._editor.begin_move()
         else:
-            # Empty lane press — pending (click = add, drag = rubber-band)
             self._drag_mode = _DragMode.PENDING
             self._drag_start = event.position()
             self._drag_current = event.position()
@@ -319,8 +424,7 @@ class TimelineWidget(QWidget):
         dy = self._drag_current.y() - self._drag_start.y()
 
         if self._drag_mode == _DragMode.PENDING:
-            dist = math.hypot(dx, dy)
-            if dist >= _DRAG_THRESHOLD:
+            if math.hypot(dx, dy) >= _DRAG_THRESHOLD:
                 self._drag_mode = _DragMode.RUBBER_BAND
 
         elif self._drag_mode == _DragMode.RUBBER_BAND:
@@ -328,10 +432,45 @@ class TimelineWidget(QWidget):
 
         elif self._drag_mode == _DragMode.MOVE:
             if self._editor is not None:
-                lane_vp = self._active_lane_vp()
-                dt = dx / lane_vp.width * lane_vp.visible_time if lane_vp.width else 0.0
-                dp = int(-dy / lane_vp.lane_height * 100.0) if lane_vp.lane_height else 0
-                self._editor.move_selection(dt, dp)
+                lanes = self._compute_lanes()
+                al = self._active_lane(lanes)
+                if al is not None:
+                    lane_vp = self._lane_viewport(al)
+                    dt = dx / lane_vp.width * lane_vp.visible_time if lane_vp.width else 0.0
+                    dp = int(-dy / lane_vp.lane_height * 100.0) if lane_vp.lane_height else 0
+                    self._editor.move_selection(dt, dp)
+            self.update()
+
+        elif self._drag_mode in (_DragMode.SPAN_START, _DragMode.SPAN_END):
+            if self._editor is not None:
+                t = self._viewport.x_to_time(float(self._drag_current.x()))
+                li = self._drag_target_layer
+                ch = self._editor.active_channel
+                if 0 <= li < len(ch.layers):
+                    layer = ch.layers[li]
+                    if layer.span is not None:
+                        if self._drag_mode == _DragMode.SPAN_START:
+                            new_start = min(t, self._drag_span_anchor - 0.001)
+                            self._editor.update_span_live(li, (new_start, self._drag_span_anchor))
+                        else:
+                            new_end = max(t, self._drag_span_anchor + 0.001)
+                            self._editor.update_span_live(li, (self._drag_span_anchor, new_end))
+            self.update()
+
+        elif self._drag_mode in (_DragMode.FADE_IN, _DragMode.FADE_OUT):
+            if self._editor is not None:
+                t = self._viewport.x_to_time(float(self._drag_current.x()))
+                li = self._drag_target_layer
+                ch = self._editor.active_channel
+                if 0 <= li < len(ch.layers):
+                    layer = ch.layers[li]
+                    if layer.span is not None:
+                        if self._drag_mode == _DragMode.FADE_IN:
+                            new_fi = max(0.0, t - self._drag_span_anchor)
+                            self._editor.update_fades_live(li, new_fi, layer.fade_out)
+                        else:
+                            new_fo = max(0.0, self._drag_span_anchor - t)
+                            self._editor.update_fades_live(li, layer.fade_in, new_fo)
             self.update()
 
         event.accept()
@@ -345,32 +484,45 @@ class TimelineWidget(QWidget):
         self._drag_mode = _DragMode.NONE
 
         if mode == _DragMode.PENDING:
-            # No significant movement → add point
             if self._editor is not None and self._editor.has_active_channel:
-                lane_vp = self._active_lane_vp()
-                x = float(self._drag_start.x())
-                y = float(self._drag_start.y())
-                t = lane_vp.x_to_time(x)
-                pos = int(round(max(0.0, min(100.0, lane_vp.y_to_pos(y)))))
-                self._scripting_mode.add_point(self._editor, t, pos)
+                lanes = self._compute_lanes()
+                al = self._active_lane(lanes)
+                if al is not None:
+                    lane_vp = self._lane_viewport(al)
+                    x = float(self._drag_start.x())
+                    y = float(self._drag_start.y())
+                    t = lane_vp.x_to_time(x)
+                    pos = int(round(max(0.0, min(100.0, lane_vp.y_to_pos(y)))))
+                    self._scripting_mode.add_point(self._editor, t, pos)
 
         elif mode == _DragMode.RUBBER_BAND:
             if self._editor is not None:
-                lane_vp = self._active_lane_vp()
-                x0 = min(self._drag_start.x(), self._drag_current.x())
-                x1 = max(self._drag_start.x(), self._drag_current.x())
-                t0 = lane_vp.x_to_time(float(x0))
-                t1 = lane_vp.x_to_time(float(x1))
-                additive = bool(
-                    event.modifiers()
-                    & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
-                )
-                self._editor.select_time_range(t0, t1, additive=additive)
+                lanes = self._compute_lanes()
+                al = self._active_lane(lanes)
+                if al is not None:
+                    lane_vp = self._lane_viewport(al)
+                    x0 = min(self._drag_start.x(), self._drag_current.x())
+                    x1 = max(self._drag_start.x(), self._drag_current.x())
+                    t0 = lane_vp.x_to_time(float(x0))
+                    t1 = lane_vp.x_to_time(float(x1))
+                    additive = bool(
+                        event.modifiers()
+                        & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+                    )
+                    self._editor.select_time_range(t0, t1, additive=additive)
             self.update()
 
         elif mode == _DragMode.MOVE:
             if self._editor is not None:
                 self._editor.end_move()
+
+        elif mode in (_DragMode.SPAN_START, _DragMode.SPAN_END):
+            if self._editor is not None:
+                self._editor.end_span_drag()
+
+        elif mode in (_DragMode.FADE_IN, _DragMode.FADE_OUT):
+            if self._editor is not None:
+                self._editor.end_fade_drag()
 
         event.accept()
 
@@ -409,43 +561,127 @@ class TimelineWidget(QWidget):
             self._editor.select_all()
             event.accept()
         elif key == Qt.Key.Key_P:
-            # Add point at playhead with pos 50 (keyboard authoring shortcut)
             if self._editor.has_active_channel:
                 self._scripting_mode.add_point(self._editor, self._player.logical_time, 50)
             event.accept()
         else:
             super().keyPressEvent(event)
 
-    # ----------------------------------------------------------------- helpers
+    # ----------------------------------------------------------------- lane geometry
 
-    def _lane_at_y(self, y: float) -> int:
-        """Return the lane index (0-based) corresponding to a y coordinate."""
-        n = max(1, len(self._channels))
-        lane_area_h = max(1, self.height() - _RULER_H)
-        per_lane_h = lane_area_h // n
-        idx = int((y - _RULER_H) / per_lane_h) if per_lane_h > 0 else 0
-        return max(0, min(n - 1, idx))
-
-    def _active_lane_vp(self) -> Viewport:
-        """Viewport for the active channel's lane."""
-        n = max(1, len(self._channels))
+    def _compute_lanes(self) -> list[_LaneInfo]:
+        """Build the list of logical lanes with pixel bounds."""
+        n_ch = max(1, len(self._channels))
         lane_area_top = _RULER_H
         lane_area_h = max(1, self.height() - _RULER_H)
-        per_lane_h = lane_area_h // n
-        i = self._active_index
-        i = max(0, min(n - 1, i))
-        top = lane_area_top + i * per_lane_h
-        h = per_lane_h if i < n - 1 else lane_area_h - i * per_lane_h
-        return replace(self._viewport, lane_top=top, lane_height=max(1, h))
+
+        # Count total "units" to divide height
+        units: list[int] = []
+        for i in range(len(self._channels)):
+            if i in self._expanded_channels:
+                n_layers = max(1, len(self._channels[i].layers))
+                units.append(1 + n_layers)
+            else:
+                units.append(1)
+        if not units:
+            units = [1]
+        total_units = sum(units)
+        unit_h = max(20, lane_area_h // total_units)
+
+        lanes: list[_LaneInfo] = []
+        y = lane_area_top
+        for ci, ch in enumerate(self._channels):
+            ch_h = unit_h
+            lanes.append(_LaneInfo(ch_idx=ci, layer_idx=-1, top=y, height=ch_h))
+            y += ch_h
+            if ci in self._expanded_channels:
+                n_layers = max(1, len(ch.layers))
+                for li in range(n_layers):
+                    lanes.append(_LaneInfo(ch_idx=ci, layer_idx=li, top=y, height=unit_h))
+                    y += unit_h
+
+        return lanes
+
+    def _lane_at(self, x: float, y: float, lanes: list[_LaneInfo]) -> _LaneInfo | None:
+        for lane in lanes:
+            if lane.top <= y < lane.bottom:
+                return lane
+        return None
+
+    def _active_lane(self, lanes: list[_LaneInfo]) -> _LaneInfo | None:
+        """Return the composite lane for the active channel."""
+        for lane in lanes:
+            if lane.ch_idx == self._active_index and lane.is_channel:
+                return lane
+        return None
+
+    def _lane_viewport(self, lane: _LaneInfo) -> Viewport:
+        return replace(
+            self._viewport,
+            lane_top=lane.top,
+            lane_height=max(1, lane.height),
+        )
+
+    def _toggle_expand(self, ch_idx: int) -> None:
+        if ch_idx in self._expanded_channels:
+            self._expanded_channels.discard(ch_idx)
+        else:
+            self._expanded_channels.add(ch_idx)
+        self.update()
+
+    def _lane_at_y(self, y: float) -> int:
+        """Backward-compat: return channel index for y (used internally)."""
+        lanes = self._compute_lanes()
+        lane = self._lane_at(0, y, lanes)
+        return lane.ch_idx if lane else 0
+
+    def _active_lane_vp(self) -> Viewport:
+        lanes = self._compute_lanes()
+        al = self._active_lane(lanes)
+        if al:
+            return self._lane_viewport(al)
+        return self._viewport
+
+    # ----------------------------------------------------------------- hit testing
 
     def _hit_test(self, t: float, lane_vp: Viewport) -> Action | None:
         if not self._editor or not self._editor.has_active_channel:
             return None
-        actions = self._editor.active_channel.synthesize()
+        # Hit test against active layer's actions, not synthesized
+        ch = self._editor.active_channel
+        li = self._editor.active_layer_index
+        if not (0 <= li < len(ch.layers)):
+            return None
+        actions = ch.layers[li].actions
         if not actions or lane_vp.width == 0:
             return None
         tol = (_POINT_R + 3) / lane_vp.width * lane_vp.visible_time
         return actions.at_time(t, tol)
+
+    def _hit_span_handle(
+        self, x: float, layer, lane_vp: Viewport
+    ) -> str | None:
+        """Return 'span_start','span_end','fade_in','fade_out' or None."""
+        if layer.span is None:
+            return None
+        start, end = layer.span
+        x_start = lane_vp.time_to_x(start)
+        x_end = lane_vp.time_to_x(end)
+
+        # Fade handles take priority over span edges (they're inside the span)
+        if layer.fade_in > 0:
+            x_fi = lane_vp.time_to_x(start + layer.fade_in)
+            if abs(x - x_fi) <= _HANDLE_TOL:
+                return "fade_in"
+        if layer.fade_out > 0:
+            x_fo = lane_vp.time_to_x(end - layer.fade_out)
+            if abs(x - x_fo) <= _HANDLE_TOL:
+                return "fade_out"
+        if abs(x - x_start) <= _HANDLE_TOL:
+            return "span_start"
+        if abs(x - x_end) <= _HANDLE_TOL:
+            return "span_end"
+        return None
 
     # ----------------------------------------------------------------- paint
 
@@ -457,24 +693,31 @@ class TimelineWidget(QWidget):
         self._draw_ruler(painter)
         self._draw_time_grid(painter)
 
-        num = max(1, len(self._channels))
-        lane_area_top = _RULER_H
-        lane_area_h = max(1, self.height() - _RULER_H)
-        per_lane_h = lane_area_h // num
-
+        lanes = self._compute_lanes()
         sel = self._editor.selection if self._editor is not None else frozenset()
+        active_li = self._editor.active_layer_index if self._editor is not None else 0
 
-        for i, ch in enumerate(self._channels):
-            top = lane_area_top + i * per_lane_h
-            h = per_lane_h if i < num - 1 else lane_area_h - i * per_lane_h
-            lane_vp = replace(self._viewport, lane_top=top, lane_height=max(1, h))
-            color = _LANE_COLORS[i % len(_LANE_COLORS)]
-            is_active = i == self._active_index
-            self._draw_lane(painter, lane_vp, ch, is_active, color, sel)
-            if is_active and num > 1:
+        for lane in lanes:
+            ch = self._channels[lane.ch_idx] if lane.ch_idx < len(self._channels) else None
+            if ch is None:
+                continue
+            color = _LANE_COLORS[lane.ch_idx % len(_LANE_COLORS)]
+            is_active_ch = lane.ch_idx == self._active_index
+            lane_vp = self._lane_viewport(lane)
+
+            if lane.is_channel:
+                self._draw_channel_lane(painter, lane, lane_vp, ch, is_active_ch, color, sel)
+            else:
+                is_active_layer = is_active_ch and (lane.layer_idx == active_li)
+                self._draw_layer_lane(painter, lane, lane_vp, ch, lane.layer_idx,
+                                      is_active_ch, is_active_layer, color, sel)
+
+        # Active channel border
+        for lane in lanes:
+            if lane.is_channel and lane.ch_idx == self._active_index and len(self._channels) > 1:
                 painter.setPen(QPen(_ACTIVE_BORDER, 1))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRect(0, top, self.width() - 1, h - 1)
+                painter.drawRect(0, lane.top, self.width() - 1, lane.height - 1)
 
         if self._drag_mode == _DragMode.RUBBER_BAND:
             self._draw_rubber_band(painter)
@@ -482,13 +725,195 @@ class TimelineWidget(QWidget):
         self._draw_playhead(painter)
         painter.end()
 
+    def _draw_channel_lane(
+        self,
+        painter: QPainter,
+        lane: _LaneInfo,
+        lane_vp: Viewport,
+        channel: Channel,
+        is_active: bool,
+        color: QColor,
+        selection: frozenset[float],
+    ) -> None:
+        actions = channel.synthesize()
+        t0, t1 = lane_vp.time_window()
+
+        # Guide lines
+        painter.setPen(QPen(_GUIDE, 1))
+        for guide_pos in (0, 25, 50, 75, 100):
+            y = int(lane_vp.pos_to_y(float(guide_pos)))
+            painter.drawLine(0, y, self.width(), y)
+
+        # Expand/collapse toggle
+        expand_char = "▼" if lane.ch_idx in self._expanded_channels else "▶"
+        painter.setPen(_LABEL_FG)
+        painter.drawText(4, lane.top + 14, expand_char)
+
+        if len(actions) == 0:
+            painter.drawText(_EXPAND_BTN_W + 4, lane.top + 14, channel.name)
+            return
+
+        lo, hi = actions.index_range(t0, t1)
+        draw_lo = max(0, lo - 1)
+        draw_hi = min(len(actions), hi + 1)
+        if draw_hi <= draw_lo:
+            painter.drawText(_EXPAND_BTN_W + 4, lane.top + 14, channel.name)
+            return
+
+        line_color = color if is_active else _dim_color(color, _DIM)
+        xs = [lane_vp.time_to_x(actions[i].at) for i in range(draw_lo, draw_hi)]
+        ys = [lane_vp.pos_to_y(float(actions[i].pos)) for i in range(draw_lo, draw_hi)]
+
+        if self._show_heatmap:
+            for j in range(len(xs) - 1):
+                a1 = actions[draw_lo + j]
+                a2 = actions[draw_lo + j + 1]
+                dt = a2.at - a1.at
+                spd = abs(a2.pos - a1.pos) / dt if dt > 0 else 0.0
+                seg_c = speed_color(spd) if is_active else _dim_color(speed_color(spd), _DIM)
+                painter.setPen(QPen(seg_c, 2))
+                painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
+        else:
+            painter.setPen(QPen(line_color, 2))
+            for j in range(len(xs) - 1):
+                painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
+
+        for i in range(lo, hi):
+            a = actions[i]
+            ax = int(lane_vp.time_to_x(a.at))
+            ay = int(lane_vp.pos_to_y(float(a.pos)))
+            if a.at in selection:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(_SEL_COLOR)
+                painter.drawEllipse(ax - _SEL_R, ay - _SEL_R, _SEL_R * 2, _SEL_R * 2)
+            else:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(line_color)
+                painter.drawEllipse(ax - _POINT_R, ay - _POINT_R, _POINT_R * 2, _POINT_R * 2)
+
+        painter.setPen(_LABEL_FG)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawText(_EXPAND_BTN_W + 4, lane.top + 14, channel.name)
+
+    def _draw_layer_lane(
+        self,
+        painter: QPainter,
+        lane: _LaneInfo,
+        lane_vp: Viewport,
+        channel: Channel,
+        layer_idx: int,
+        is_active_ch: bool,
+        is_active_layer: bool,
+        color: QColor,
+        selection: frozenset[float],
+    ) -> None:
+        if not (0 <= layer_idx < len(channel.layers)):
+            return
+        layer = channel.layers[layer_idx]
+
+        # Subtle sub-lane background
+        painter.fillRect(0, lane.top, self.width(), lane.height, _SUBLANE_BG)
+
+        # Span block
+        if layer.span is not None:
+            start, end = layer.span
+            x_start = int(lane_vp.time_to_x(start))
+            x_end = int(lane_vp.time_to_x(end))
+            span_w = max(1, x_end - x_start)
+            span_rect = QRectF(x_start, lane.top, span_w, lane.height)
+            painter.fillRect(span_rect, _SPAN_FILL)
+            painter.setPen(QPen(_SPAN_BORDER, 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(span_rect)
+
+            # Fade-in region (left ramp)
+            if layer.fade_in > 0:
+                x_fi = int(lane_vp.time_to_x(start + layer.fade_in))
+                painter.setPen(QPen(_FADE_HANDLE, 2))
+                painter.drawLine(x_fi, lane.top + 2, x_fi, lane.bottom - 2)
+                # Small handle triangle
+                self._draw_handle_triangle(painter, x_fi, lane.top + lane.height // 2,
+                                           _FADE_HANDLE, facing_right=True)
+
+            # Fade-out region (right ramp)
+            if layer.fade_out > 0:
+                x_fo = int(lane_vp.time_to_x(end - layer.fade_out))
+                painter.setPen(QPen(_FADE_HANDLE, 2))
+                painter.drawLine(x_fo, lane.top + 2, x_fo, lane.bottom - 2)
+                self._draw_handle_triangle(painter, x_fo, lane.top + lane.height // 2,
+                                           _FADE_HANDLE, facing_right=False)
+
+        # Layer action nodes
+        if len(layer.actions) == 0:
+            pass
+        else:
+            t0, t1 = lane_vp.time_window()
+            lo, hi = layer.actions.index_range(t0, t1)
+            draw_lo = max(0, lo - 1)
+            draw_hi = min(len(layer.actions), hi + 1)
+
+            if is_active_layer:
+                node_color = color
+            elif is_active_ch:
+                node_color = _dim_color(color, _GHOST_ALPHA * 3)
+            else:
+                node_color = _dim_color(color, _GHOST_ALPHA)
+
+            if draw_hi > draw_lo:
+                xs = [lane_vp.time_to_x(layer.actions[i].at) for i in range(draw_lo, draw_hi)]
+                ys = [lane_vp.pos_to_y(float(layer.actions[i].pos)) for i in range(draw_lo, draw_hi)]
+                painter.setPen(QPen(node_color, 1 if not is_active_layer else 2))
+                for j in range(len(xs) - 1):
+                    painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
+
+                for i in range(lo, hi):
+                    a = layer.actions[i]
+                    ax = int(lane_vp.time_to_x(a.at))
+                    ay = int(lane_vp.pos_to_y(float(a.pos)))
+                    if is_active_layer and a.at in selection:
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(_SEL_COLOR)
+                        painter.drawEllipse(ax - _SEL_R, ay - _SEL_R, _SEL_R * 2, _SEL_R * 2)
+                    else:
+                        r = _POINT_R if is_active_layer else max(1, _POINT_R - 1)
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(node_color)
+                        painter.drawEllipse(ax - r, ay - r, r * 2, r * 2)
+
+        # Layer label
+        from wombat.domain.channel import BlendMode
+        blend_badge = "ADD" if layer.blend == BlendMode.ADDITIVE else "OVR"
+        enabled_mark = "" if layer.enabled else "[off] "
+        label = f"  {enabled_mark}{blend_badge} {layer.name}"
+        label_color = color if is_active_layer else _dim_color(_LABEL_FG, 0.7)
+        painter.setPen(label_color)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawText(4, lane.top + 13, label)
+
+    def _draw_handle_triangle(
+        self,
+        painter: QPainter,
+        cx: int,
+        cy: int,
+        color: QColor,
+        facing_right: bool,
+    ) -> None:
+        size = 5
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        from PySide6.QtGui import QPolygon
+        from PySide6.QtCore import QPoint
+        if facing_right:
+            pts = [QPoint(cx, cy - size), QPoint(cx + size, cy), QPoint(cx, cy + size)]
+        else:
+            pts = [QPoint(cx, cy - size), QPoint(cx - size, cy), QPoint(cx, cy + size)]
+        painter.drawPolygon(pts)
+
     def _draw_time_grid(self, painter: QPainter) -> None:
-        """Vertical grid lines across the lane area at ruler tick intervals, plus t=0."""
         top = _RULER_H
         bottom = self.height()
         t0, t1 = self._viewport.time_window()
 
-        # Tick-interval grid lines (same spacing as ruler labels)
         interval = _nice_tick_interval(self._viewport.visible_time)
         first_tick = math.ceil(t0 / interval) * interval
         grid_pen = QPen(_GRID_LINE, 1)
@@ -496,13 +921,12 @@ class TimelineWidget(QWidget):
         painter.setPen(grid_pen)
         t = first_tick
         while t <= t1 + interval * 0.01:
-            if abs(t) > 1e-9:  # skip t=0 here; drawn separately below
+            if abs(t) > 1e-9:
                 x = int(self._viewport.time_to_x(t))
                 if 0 <= x <= self.width():
                     painter.drawLine(x, top, x, bottom)
             t += interval
 
-        # t=0: solid, more prominent — marks the start of the video
         x0 = int(self._viewport.time_to_x(0.0))
         if 0 <= x0 <= self.width():
             painter.setPen(QPen(_T0_LINE, 1))
@@ -533,75 +957,6 @@ class TimelineWidget(QWidget):
                     painter.setPen(_LABEL_FG)
                     painter.drawText(x + 3, _RULER_H - 7, label)
             t += interval
-
-    def _draw_lane(
-        self,
-        painter: QPainter,
-        lane_vp: Viewport,
-        channel: Channel,
-        is_active: bool,
-        color: QColor,
-        selection: frozenset[float],
-    ) -> None:
-        actions = channel.synthesize()
-        t0, t1 = lane_vp.time_window()
-
-        painter.setPen(QPen(_GUIDE, 1))
-        for guide_pos in (0, 25, 50, 75, 100):
-            y = int(lane_vp.pos_to_y(float(guide_pos)))
-            painter.drawLine(0, y, self.width(), y)
-
-        if len(actions) == 0:
-            painter.setPen(_LABEL_FG)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawText(4, lane_vp.lane_top + 14, channel.name)
-            return
-
-        lo, hi = actions.index_range(t0, t1)
-        draw_lo = max(0, lo - 1)
-        draw_hi = min(len(actions), hi + 1)
-        if draw_hi <= draw_lo:
-            painter.setPen(_LABEL_FG)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawText(4, lane_vp.lane_top + 14, channel.name)
-            return
-
-        line_color = color if is_active else _dim_color(color, _DIM)
-
-        xs = [lane_vp.time_to_x(actions[i].at) for i in range(draw_lo, draw_hi)]
-        ys = [lane_vp.pos_to_y(float(actions[i].pos)) for i in range(draw_lo, draw_hi)]
-
-        if self._show_heatmap:
-            for j in range(len(xs) - 1):
-                a1 = actions[draw_lo + j]
-                a2 = actions[draw_lo + j + 1]
-                dt = a2.at - a1.at
-                spd = abs(a2.pos - a1.pos) / dt if dt > 0 else 0.0
-                seg_c = speed_color(spd) if is_active else _dim_color(speed_color(spd), _DIM)
-                painter.setPen(QPen(seg_c, 2))
-                painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
-        else:
-            painter.setPen(QPen(line_color, 2))
-            for j in range(len(xs) - 1):
-                painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
-
-        # Nodes: selected ones drawn larger and white; others normal
-        for i in range(lo, hi):
-            a = actions[i]
-            x = int(lane_vp.time_to_x(a.at))
-            y = int(lane_vp.pos_to_y(float(a.pos)))
-            if a.at in selection:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(_SEL_COLOR)
-                painter.drawEllipse(x - _SEL_R, y - _SEL_R, _SEL_R * 2, _SEL_R * 2)
-            else:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(line_color)
-                painter.drawEllipse(x - _POINT_R, y - _POINT_R, _POINT_R * 2, _POINT_R * 2)
-
-        painter.setPen(_LABEL_FG)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawText(4, lane_vp.lane_top + 14, channel.name)
 
     def _draw_rubber_band(self, painter: QPainter) -> None:
         x0 = min(self._drag_start.x(), self._drag_current.x())

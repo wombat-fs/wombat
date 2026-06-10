@@ -1,0 +1,20 @@
+<svg width="780" height="210" viewBox="0 0 780 210" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Wombat">
+  <defs>
+    
+    <linearGradient id="wombatWave" x1="34" y1="0" x2="206" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6B4A"></stop>
+      <stop offset="0.5" stop-color="#F2913C"></stop>
+      <stop offset="1" stop-color="#16B7A6"></stop>
+    </linearGradient>
+  </defs>
+  
+  <g transform="translate(8 23) scale(0.8778)">
+    <circle cx="34" cy="50" r="17" fill="url(#wombatWave)"></circle>
+    <circle cx="206" cy="50" r="17" fill="url(#wombatWave)"></circle>
+    <path d="M34 50 C 50 132 67 132 82 96 C 94 67 106 67 121 95 C 136 67 148 67 159 96 C 174 132 191 132 206 50" stroke="url(#wombatWave)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+    <circle cx="97" cy="83" r="8.5" fill="#22282C"></circle>
+    <circle cx="145" cy="83" r="8.5" fill="#22282C"></circle>
+    <ellipse cx="121" cy="108" rx="16" ry="12" fill="#22282C"></ellipse>
+  </g>
+  <text x="232" y="140" class="wm-word" fill="#22282C">Wombat</text>
+</svg>

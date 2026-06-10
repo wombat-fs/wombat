@@ -1,7 +1,8 @@
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QEvent, Qt, Slot
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
@@ -11,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import wombat.keybindings as keybindings
 from wombat.app.editor import EditorController
 from wombat.app.project import Project
 from wombat.app.undo import UndoStack
@@ -18,7 +20,13 @@ from wombat.domain.funscript_io import FunscriptError
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
 from wombat.ui.channels_panel import ChannelsPanel
+from wombat.ui.device_simulator import SimulatorOverlay
+from wombat.ui.events_panel import EventsPanel
 from wombat.ui.mpv_widget import MpvWidget
+from wombat.ui.preferences_dialog import PreferencesDialog
+from wombat.ui.scripting import AlternatingMode, DefaultMode, RecordingMode, ScriptingMode
+from wombat.ui.scripting.recording_panel import RecordingPanel
+from wombat.ui.snippet_panel import SnippetPanel
 from wombat.ui.timeline.timeline_widget import TimelineWidget
 from wombat.ui.transport import TransportBar
 
@@ -32,16 +40,26 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Wombat")
         self.setMinimumSize(900, 600)
 
+        self._kb = keybindings.load()
+
         self._player = VideoPlayer()
         self._undo = UndoStack()
         self._project = Project.new()
         self._editor = EditorController(self._project, self._player, self._undo)
         self._loading_project: bool = False  # suppress _on_video_loaded during project load
 
+        # Scripting modes — one shared RecordingMode instance; active mode starts as Default
+        self._recording_mode = RecordingMode()
+        self._alternating_mode = AlternatingMode()
+        self._mode: ScriptingMode = DefaultMode()
+        self._recording_mode.set_context(self._editor, self._player)
+
         self._build_central()
         self._build_docks()
         self._build_menus()
+        self._build_playback_shortcuts()
         self._restore_state()
+        self._apply_stored_prefs()
 
         # Project signals
         self._project.channels_changed.connect(self._on_channels_changed)
@@ -51,6 +69,7 @@ class MainWindow(QMainWindow):
         # Editor / player signals
         self._player.video_loaded.connect(self._on_video_loaded)
         self._editor.actions_changed.connect(self._mark_dirty)
+        self._editor.layer_structure_changed.connect(self._mark_dirty)
         self._editor.history_changed.connect(self._update_edit_menu)
 
     # ------------------------------------------------------------------ layout
@@ -69,6 +88,12 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(container)
 
+        # Transparent overlay lives inside the mpv widget and covers it fully.
+        # An event filter on the mpv widget keeps the overlay geometry in sync.
+        self._simulator = SimulatorOverlay(self._player, self._project, self._mpv_widget)
+        self._simulator.setGeometry(self._mpv_widget.rect())
+        self._mpv_widget.installEventFilter(self)
+
     def _build_docks(self) -> None:
         self._timeline = TimelineWidget(self._player)
         self._timeline.set_editor(self._editor)
@@ -80,28 +105,65 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, timeline_dock)
         self._timeline_dock = timeline_dock
 
-        self._channels_panel = ChannelsPanel(self._project)
+        self._channels_panel = ChannelsPanel(self._project, editor=self._editor)
         channels_dock = QDockWidget("Channels / Layers", self)
         channels_dock.setObjectName("channelsDock")
         channels_dock.setWidget(self._channels_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, channels_dock)
         self._channels_dock = channels_dock
 
+        self._snippet_panel = SnippetPanel(self._editor, self._player)
+        snippets_dock = QDockWidget("Snippets", self)
+        snippets_dock.setObjectName("snippetsDock")
+        snippets_dock.setWidget(self._snippet_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, snippets_dock)
+        self._snippets_dock = snippets_dock
+        self.tabifyDockWidget(channels_dock, snippets_dock)
+
+        self._events_panel = EventsPanel(self._editor)
+        events_dock = QDockWidget("Events", self)
+        events_dock.setObjectName("eventsDock")
+        events_dock.setWidget(self._events_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, events_dock)
+        self._events_dock = events_dock
+        self.tabifyDockWidget(snippets_dock, events_dock)
+
+        # Sync playhead position to events panel start time
+        self._player.position_changed.connect(self._events_panel.sync_playhead)
+
+        # Recording panel — visible only when RecordingMode is active
+        self._recording_panel = RecordingPanel(self._recording_mode)
+        recording_dock = QDockWidget("Recording", self)
+        recording_dock.setObjectName("recordingDock")
+        recording_dock.setWidget(self._recording_panel)
+        recording_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, recording_dock)
+        recording_dock.hide()
+        self._recording_dock = recording_dock
+
+        # Sync button when auto-stop fires (playback paused mid-recording)
+        self._player.playback_changed.connect(
+            lambda _: self._recording_panel.sync_recording_state()
+        )
+
     def _build_menus(self) -> None:
+        kb = self._kb
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&File")
 
         new_action = file_menu.addAction("New Project")
-        new_action.setShortcut("Ctrl+N")
+        new_action.setShortcut(kb["new_project"])
         new_action.triggered.connect(self._new_project)
 
         open_project_action = file_menu.addAction("Open Project…")
-        open_project_action.setShortcut("Ctrl+O")
+        open_project_action.setShortcut(kb["open_project"])
         open_project_action.triggered.connect(self._open_project)
 
         open_media_action = file_menu.addAction("Open Media…")
-        open_media_action.setShortcut("Ctrl+Shift+O")
+        open_media_action.setShortcut(kb["open_media"])
         open_media_action.triggered.connect(self._open_media)
 
         file_menu.addSeparator()
@@ -112,70 +174,209 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         self._save_action = file_menu.addAction("Save Project")
-        self._save_action.setShortcut("Ctrl+S")
+        self._save_action.setShortcut(kb["save"])
         self._save_action.triggered.connect(self._save_project)
 
         self._save_as_action = file_menu.addAction("Save Project As…")
-        self._save_as_action.setShortcut("Ctrl+Shift+S")
+        self._save_as_action.setShortcut(kb["save_as"])
         self._save_as_action.triggered.connect(self._save_project_as)
 
         export_action = file_menu.addAction("Export Funscripts…")
+        export_action.setShortcut(kb["export"])
         export_action.triggered.connect(self._export_funscripts)
 
         file_menu.addSeparator()
         quit_action = file_menu.addAction("&Quit")
-        quit_action.setShortcut("Ctrl+Q")
+        quit_action.setShortcut(kb["quit"])
         quit_action.triggered.connect(self.close)
 
         edit_menu = mb.addMenu("&Edit")
 
         self._undo_action = edit_menu.addAction("Undo")
-        self._undo_action.setShortcut("Ctrl+Z")
+        self._undo_action.setShortcut(kb["undo"])
         self._undo_action.setEnabled(False)
         self._undo_action.triggered.connect(self._editor.undo)
 
         self._redo_action = edit_menu.addAction("Redo")
-        self._redo_action.setShortcut("Ctrl+Y")
+        self._redo_action.setShortcut(kb["redo"])
         self._redo_action.setEnabled(False)
         self._redo_action.triggered.connect(self._editor.redo)
 
         edit_menu.addSeparator()
 
         cut_action = edit_menu.addAction("Cut")
-        cut_action.setShortcut("Ctrl+X")
+        cut_action.setShortcut(kb["cut"])
         cut_action.triggered.connect(self._editor.cut)
 
         copy_action = edit_menu.addAction("Copy")
-        copy_action.setShortcut("Ctrl+C")
+        copy_action.setShortcut(kb["copy"])
         copy_action.triggered.connect(self._editor.copy)
 
         paste_action = edit_menu.addAction("Paste")
-        paste_action.setShortcut("Ctrl+V")
+        paste_action.setShortcut(kb["paste"])
         paste_action.triggered.connect(
             lambda: self._editor.paste(self._player.logical_time)
         )
 
         select_all_action = edit_menu.addAction("Select All")
-        select_all_action.setShortcut("Ctrl+A")
+        select_all_action.setShortcut(kb["select_all"])
         select_all_action.triggered.connect(self._editor.select_all)
+
+        delete_action = edit_menu.addAction("Delete")
+        delete_action.setShortcut(kb["delete"])
+        delete_action.triggered.connect(self._editor.remove_selection)
+
+        edit_menu.addSeparator()
+
+        prefs_action = edit_menu.addAction("Preferences…")
+        prefs_action.triggered.connect(self._show_preferences)
+
+        scripting_menu = mb.addMenu("&Scripting")
+
+        from PySide6.QtGui import QActionGroup
+        mode_group = QActionGroup(self)
+        mode_group.setExclusive(True)
+
+        self._mode_default_action = scripting_menu.addAction("Default Mode")
+        self._mode_default_action.setCheckable(True)
+        self._mode_default_action.setChecked(True)
+        self._mode_default_action.setToolTip("Normal point-insertion mode")
+        mode_group.addAction(self._mode_default_action)
+        self._mode_default_action.triggered.connect(
+            lambda: self._set_mode("default")
+        )
+
+        self._mode_alternating_action = scripting_menu.addAction("Alternating Mode")
+        self._mode_alternating_action.setCheckable(True)
+        self._mode_alternating_action.setToolTip(
+            "Auto-alternates between top (100) and bottom (0) positions on each keypress"
+        )
+        mode_group.addAction(self._mode_alternating_action)
+        self._mode_alternating_action.triggered.connect(
+            lambda: self._set_mode("alternating")
+        )
+
+        self._mode_recording_action = scripting_menu.addAction("Recording Mode")
+        self._mode_recording_action.setCheckable(True)
+        self._mode_recording_action.setToolTip(
+            "Capture slider position in real time during playback"
+        )
+        mode_group.addAction(self._mode_recording_action)
+        self._mode_recording_action.triggered.connect(
+            lambda: self._set_mode("recording")
+        )
+
+        scripting_menu.addSeparator()
+
+        reset_alt_action = scripting_menu.addAction("Reset Alternating")
+        reset_alt_action.setToolTip("Reset alternating state so next keypress inserts top position")
+        reset_alt_action.triggered.connect(self._alternating_mode.reset)
 
         view_menu = mb.addMenu("&View")
         view_menu.addAction(self._timeline_dock.toggleViewAction())
         view_menu.addAction(self._channels_dock.toggleViewAction())
 
+        sim_action = view_menu.addAction("Device Simulator")
+        sim_action.setCheckable(True)
+        sim_action.setChecked(True)
+        sim_action.toggled.connect(self._simulator.setVisible)
+
         heatmap_action = view_menu.addAction("Heatmap")
         heatmap_action.setCheckable(True)
         heatmap_action.toggled.connect(self._timeline.set_heatmap)
 
-        snap_action = view_menu.addAction("Snap to Frame")
-        snap_action.setCheckable(True)
-        snap_action.toggled.connect(self._on_snap_toggled)
+        self._snap_action = view_menu.addAction("Snap to Frame")
+        self._snap_action.setCheckable(True)
+        self._snap_action.toggled.connect(self._on_snap_toggled)
 
         help_menu = mb.addMenu("&Help")
         about_action = help_menu.addAction("About Wombat")
         about_action.triggered.connect(self._show_about)
 
+    # --------------------------------------------------- playback shortcuts
+
+    def _build_playback_shortcuts(self) -> None:
+        """Wire non-menu keyboard shortcuts from the keybinding config."""
+        kb = self._kb
+
+        def _sc(key: str, slot) -> None:
+            seq = kb.get(key, "")
+            if seq:
+                QShortcut(QKeySequence(seq), self, slot)
+
+        _sc("play_pause",    self._player.toggle_play)
+        _sc("frame_forward", lambda: self._player.step_frame(forward=True))
+        _sc("frame_back",    lambda: self._player.step_frame(forward=False))
+        _sc("seek_forward",  lambda: self._player.seek_relative(keybindings._SEEK_STEP))
+        _sc("seek_back",     lambda: self._player.seek_relative(-keybindings._SEEK_STEP))
+
+        # Action-insertion keys (1–9 = pos 10–90, 0 = 100, ` = 0).
+        # Guarded: don't fire when a text-input widget has focus.
+        action_keys = keybindings.load_action_keys()
+        for key_seq, pos in zip(action_keys, keybindings.ACTION_KEY_POSITIONS):
+            if key_seq:
+                QShortcut(
+                    QKeySequence(key_seq), self,
+                    lambda p=pos: self._insert_action_at_pos(p),
+                )
+
+    def _insert_action_at_pos(self, pos: int) -> None:
+        """Route a keypress through the active scripting mode.
+
+        Ignored when a text-editing widget has keyboard focus.
+        """
+        from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTextEdit
+        focused = self.focusWidget()
+        if isinstance(focused, (QLineEdit, QTextEdit, QAbstractSpinBox)):
+            return
+        self._mode.add_point(self._editor, self._player.logical_time, pos)
+
+    def _set_mode(self, mode_name: str) -> None:
+        """Deactivate the current mode and activate the named one."""
+        if hasattr(self._mode, "deactivate"):
+            self._mode.deactivate()  # type: ignore[union-attr]
+
+        if mode_name == "alternating":
+            self._mode = self._alternating_mode
+            self._recording_dock.hide()
+        elif mode_name == "recording":
+            self._mode = self._recording_mode
+            self._recording_dock.show()
+        else:
+            self._mode = DefaultMode()
+            self._recording_dock.hide()
+
+        log.debug("Scripting mode: %s", self._mode.name)
+
+    # --------------------------------------------------- preferences
+
+    def _apply_stored_prefs(self) -> None:
+        """Apply saved preferences at startup."""
+        from wombat.domain.synthesis import set_default_params
+        set_default_params(self._settings.get_synthesis_params())
+
+        snap = self._settings.load_snap_to_frame()
+        self._editor.snap_to_frame = snap
+        self._snap_action.setChecked(snap)
+
+    @Slot()
+    def _show_preferences(self) -> None:
+        dlg = PreferencesDialog(self._settings, parent=self)
+        if dlg.exec() == PreferencesDialog.DialogCode.Accepted:
+            self._apply_stored_prefs()
+            # Invalidate all channel synthesis caches so new params take effect
+            for ch in self._project.channels:
+                ch._invalidate_cache()
+            self._timeline.update()
+            log.info("Preferences saved")
+
     # ---------------------------------------------------------------- geometry
+
+    def eventFilter(self, obj, ev) -> bool:  # type: ignore[override]
+        """Keep the simulator overlay flush with the mpv widget on resize."""
+        if obj is self._mpv_widget and ev.type() == QEvent.Type.Resize:
+            self._simulator.setGeometry(self._mpv_widget.rect())
+        return super().eventFilter(obj, ev)
 
     def _restore_state(self) -> None:
         geom = self._settings.load_geometry()
@@ -216,6 +417,7 @@ class MainWindow(QMainWindow):
         self._editor.set_project(project)
         self._timeline.set_project(project)
         self._channels_panel.set_project(project)
+        self._simulator.set_project(project)
 
         project.channels_changed.connect(self._on_channels_changed)
         project.active_changed.connect(self._on_active_changed)
@@ -444,5 +646,5 @@ class MainWindow(QMainWindow):
             "About Wombat",
             "<b>Wombat</b><br>"
             "Cross-platform funscript authoring and editing tool.<br><br>"
-            "Version 0.1.0 — Phase 5 (Multi-channel Project)",
+            "Version 0.1.0 — Phase 6 (Layers)",
         )

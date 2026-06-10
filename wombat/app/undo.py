@@ -1,20 +1,23 @@
 """UndoStack — snapshot-based, transaction-bracketed, multi-channel-ready.
 
 Usage:
-  Discrete edit:  stack.snapshot(desc, targets, sel) → mutate → done
-  Gesture (drag): stack.begin(desc, targets, sel) → mutate repeatedly
-                  → stack.commit()  (one undo step) or stack.cancel()
+  Discrete action edit:  stack.snapshot(desc, targets, sel) → mutate → done
+  Gesture (drag):        stack.begin(desc, targets, sel) → mutate repeatedly
+                         → stack.commit()  (one undo step) or stack.cancel()
+  Structural layer op:   stack.snapshot_structural(desc, channel, ali, sel) → mutate → done
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import copy
+from dataclasses import dataclass, field
 
 from wombat.domain.action import ActionList
-from wombat.domain.channel import Channel
+from wombat.domain.channel import Channel, Layer
 
 
 @dataclass
 class LayerSnapshot:
+    """Captures one layer's actions (for action-level edits)."""
     channel: Channel
     layer_index: int
     actions: ActionList       # deep copy at snapshot time
@@ -22,9 +25,23 @@ class LayerSnapshot:
 
 
 @dataclass
+class StructuralSnapshot:
+    """Captures the full layer list (for structural ops: add/remove/reorder)."""
+    channel: Channel
+    layers: list[Layer]       # deep copy of ALL layers
+    active_layer_index: int   # the pre-op active layer index
+    selection: frozenset[float]
+
+
+@dataclass
 class UndoEntry:
     description: str
     snapshots: list[LayerSnapshot]
+    structural: list[StructuralSnapshot] = field(default_factory=list)
+
+
+def _deep_copy_layers(layers: list[Layer]) -> list[Layer]:
+    return copy.deepcopy(layers)
 
 
 class UndoStack:
@@ -57,13 +74,25 @@ class UndoStack:
             )
             for s in entry.snapshots
         ]
-        return UndoEntry(entry.description, snaps)
+        struct = [
+            StructuralSnapshot(
+                s.channel,
+                _deep_copy_layers(s.channel.layers),
+                s.active_layer_index,
+                selection,
+            )
+            for s in entry.structural
+        ]
+        return UndoEntry(entry.description, snaps, struct)
 
     @staticmethod
     def _restore(entry: UndoEntry) -> None:
         for s in entry.snapshots:
             s.channel.layers[s.layer_index].actions = s.actions.copy()
             s.channel._invalidate_cache()
+        for ss in entry.structural:
+            ss.channel.layers = _deep_copy_layers(ss.layers)
+            ss.channel._invalidate_cache()
 
     # ------------------------------------------------------------------ public
 
@@ -77,6 +106,37 @@ class UndoStack:
         self._undo.append(UndoEntry(description, self._make_snapshots(targets, selection)))
         self._redo.clear()
 
+    def snapshot_structural(
+        self,
+        description: str,
+        channel: Channel,
+        active_layer_index: int,
+        selection: frozenset[float],
+    ) -> None:
+        """Capture pre-structural-edit state (entire layer list)."""
+        snap = StructuralSnapshot(
+            channel=channel,
+            layers=_deep_copy_layers(channel.layers),
+            active_layer_index=active_layer_index,
+            selection=selection,
+        )
+        self._undo.append(UndoEntry(description, [], [snap]))
+        self._redo.clear()
+
+    def snapshot_multi_structural(
+        self,
+        description: str,
+        channels: list[tuple[Channel, int]],
+        selection: frozenset[float],
+    ) -> None:
+        """Capture pre-structural-edit state for multiple channels as one undo entry."""
+        snaps = [
+            StructuralSnapshot(ch, _deep_copy_layers(ch.layers), ali, selection)
+            for ch, ali in channels
+        ]
+        self._undo.append(UndoEntry(description, [], snaps))
+        self._redo.clear()
+
     def begin(
         self,
         description: str,
@@ -85,6 +145,22 @@ class UndoStack:
     ) -> None:
         """Start a gesture — pre-gesture state captured once."""
         self._pending = UndoEntry(description, self._make_snapshots(targets, selection))
+
+    def begin_structural(
+        self,
+        description: str,
+        channel: Channel,
+        active_layer_index: int,
+        selection: frozenset[float],
+    ) -> None:
+        """Start a structural gesture — captures entire layer list once."""
+        snap = StructuralSnapshot(
+            channel=channel,
+            layers=_deep_copy_layers(channel.layers),
+            active_layer_index=active_layer_index,
+            selection=selection,
+        )
+        self._pending = UndoEntry(description, [], [snap])
 
     def commit(self) -> None:
         """Finalise the in-progress gesture as one undo entry."""

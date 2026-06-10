@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wombat — Logo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --cream:#F6EEE3;
+    --paper:#FBF6EE;
+    --ink:#22282C;
+    --ink-soft:#6A5F57;
+    --line:#E7DBCB;
+    --coral:#FF6B4A;
+    --amber:#F2913C;
+    --teal:#16B7A6;
+    --dark:#1B1F22;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:#EAE0D2;color:var(--ink);
+    font-family:"Nunito Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:60px 36px 110px;}
+  .kicker{font-family:"JetBrains Mono",monospace;font-size:12px;letter-spacing:.28em;text-transform:uppercase;color:var(--ink-soft);margin:0 0 18px;}
+  h2.sec{font-family:"Fredoka",sans-serif;font-weight:600;font-size:15px;letter-spacing:.02em;margin:0;color:var(--ink);}
+  .note{color:var(--ink-soft);font-size:14.5px;line-height:1.6;margin:6px 0 0;max-width:560px;}
+
+  /* card grid */
+  .panel{background:var(--paper);border:1px solid var(--line);border-radius:22px;overflow:hidden;box-shadow:0 18px 40px -30px rgba(74,53,42,.5);}
+  .panel + .panel{margin-top:22px;}
+  .panel-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:22px 28px;border-bottom:1px solid var(--line);}
+  .panel-head .tag{font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);margin-left:auto;}
+  .pad{padding:46px 36px;}
+
+  /* hero */
+  .hero{background:var(--cream);border-radius:26px;padding:84px 40px;display:flex;align-items:center;justify-content:center;border:1px solid var(--line);}
+  .lockup{display:flex;align-items:center;gap:26px;}
+  .lockup.lg{gap:30px;}
+  .word{display:flex;flex-direction:column;line-height:.9;}
+  .word .name{font-family:"Fredoka",sans-serif;font-weight:600;letter-spacing:-.012em;color:var(--ink);}
+  .word .tag{font-family:"JetBrains Mono",monospace;text-transform:uppercase;color:var(--teal);}
+  .hero .name{font-size:96px;}
+  .hero .tag{font-size:15px;letter-spacing:.34em;margin-top:16px;margin-left:3px;}
+
+  svg{display:block;}
+
+  .row{display:flex;gap:22px;flex-wrap:wrap;}
+  .col{flex:1 1 0;min-width:240px;}
+
+  /* swatches */
+  .sw{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;}
+  .chip{border-radius:14px;border:1px solid var(--line);overflow:hidden;background:#fff;}
+  .chip .fill{height:84px;}
+  .chip .meta{padding:10px 12px;}
+  .chip .nm{font-family:"Fredoka",sans-serif;font-weight:600;font-size:13px;}
+  .chip .hx{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-soft);margin-top:2px;}
+
+  .tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:40px;border-radius:18px;border:1px solid var(--line);}
+  .tile.cream{background:var(--cream);}
+  .tile.dark{background:var(--dark);border-color:#2c3338;}
+  .tile.white{background:#fff;}
+  .tlabel{font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-soft);}
+  .tile.dark .tlabel{color:#9aa4a8;}
+
+  .favstrip{display:flex;align-items:flex-end;gap:30px;flex-wrap:wrap;}
+  .favstrip .f{display:flex;flex-direction:column;align-items:center;gap:10px;}
+  .favstrip .f .px{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-soft);}
+  .appbox{border-radius:22px;overflow:hidden;box-shadow:0 14px 30px -16px rgba(0,0,0,.5);}
+
+  /* in-use mocks */
+  .mock-tab{background:#fff;border:1px solid var(--line);border-radius:12px 12px 0 0;display:inline-flex;align-items:center;gap:9px;padding:10px 16px 11px;font-size:13.5px;color:var(--ink);box-shadow:0 -1px 0 var(--line) inset;}
+  .mock-dock{background:rgba(255,255,255,.7);border:1px solid var(--line);border-radius:20px;padding:12px;display:inline-flex;gap:12px;backdrop-filter:blur(4px);}
+  .mock-btn{display:inline-flex;align-items:center;gap:10px;background:var(--ink);color:#fff;border:none;border-radius:11px;padding:12px 18px;font-family:"Fredoka",sans-serif;font-weight:500;font-size:15px;}
+  .mock-win{background:var(--dark);border-radius:14px;padding:0;overflow:hidden;width:340px;border:1px solid #2c3338;}
+  .mock-win .bar{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid #2c3338;}
+  .mock-win .bar .d{width:11px;height:11px;border-radius:50%;}
+  .mock-win .bar .ttl{margin-left:8px;color:#cfd6d9;font-size:12.5px;font-family:"JetBrains Mono",monospace;letter-spacing:.05em;display:flex;align-items:center;gap:8px;}
+  .mock-win .body{height:120px;display:flex;align-items:center;justify-content:center;background:radial-gradient(120% 120% at 50% 0%,#23292d,#15181b);}
+
+  .files{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;}
+  .file{display:flex;align-items:center;gap:14px;background:var(--cream);border:1px solid var(--line);border-radius:14px;padding:14px 16px;}
+  .file .ext{font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:600;color:#fff;background:var(--ink);border-radius:7px;padding:5px 8px;letter-spacing:.04em;}
+  .file .fn{font-family:"Fredoka",sans-serif;font-weight:500;font-size:14.5px;line-height:1.35;}
+  .file > div{display:flex;flex-direction:column;gap:3px;}
+  .file .fd{font-size:12.5px;color:var(--ink-soft);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="kicker">Wombat · Brand mark</p>
+
+  <!-- HERO -->
+  <div class="hero" id="hero"></div>
+
+  <!-- THE MARK -->
+  <div class="panel" style="margin-top:22px;">
+    <div class="panel-head"><h2 class="sec">The mark</h2><span class="tag">W-Wave</span></div>
+    <div class="pad row" style="align-items:center;">
+      <div class="col" style="flex:0 0 300px;display:flex;justify-content:center;" id="markBig"></div>
+      <div class="col">
+        <p class="note" style="font-size:16px;color:var(--ink);">One stroke does three jobs at once: it spells a <strong>W</strong>, it draws a <strong>position-over-time waveform</strong> — the heart of a funscript — and it forms a wombat's <strong>brow, eyes and nose</strong>. Coral picks up at the in-point and resolves to teal at the out-point.</p>
+        <p class="note">Built on a single rounded stroke, so it stays crisp and recognisable all the way down to a 16px favicon.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOCKUPS -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">Lockups</h2><span class="tag">Horizontal · Stacked</span></div>
+    <div class="pad">
+      <div class="row">
+        <div class="tile cream col" style="min-width:300px;"><span class="tlabel">Primary · horizontal</span><div id="lk-h"></div></div>
+        <div class="tile cream col" style="flex:0 0 300px;"><span class="tlabel">Stacked</span><div id="lk-s"></div></div>
+      </div>
+      <div class="row" style="margin-top:22px;">
+        <div class="tile cream col" style="min-width:300px;"><span class="tlabel">With tagline</span><div id="lk-t"></div></div>
+        <div class="tile dark col" style="flex:0 0 300px;"><span class="tlabel">Reversed</span><div id="lk-r"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- APP ICON -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">App icon &amp; favicon</h2><span class="tag">Scales to 16px</span></div>
+    <div class="pad">
+      <div class="row" style="align-items:center;">
+        <div class="col" style="flex:0 0 auto;"><div class="appbox" id="app256"></div></div>
+        <div class="col">
+          <p class="note">Dark squircle keeps the gradient glowing in a dock or taskbar. The face features flip to cream for contrast. Below: how it holds up at small sizes.</p>
+          <div class="favstrip" style="margin-top:20px;">
+            <div class="f"><div class="appbox" id="app64"></div><span class="px">64</span></div>
+            <div class="f"><div class="appbox" id="app48"></div><span class="px">48</span></div>
+            <div class="f"><div class="appbox" id="app32"></div><span class="px">32</span></div>
+            <div class="f"><div class="appbox" id="app16"></div><span class="px">16</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ONE COLOR -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">One-color</h2><span class="tag">Ink · Reversed</span></div>
+    <div class="pad row">
+      <div class="tile white col"><span class="tlabel">Ink on light</span><div id="mono-l"></div></div>
+      <div class="tile dark col"><span class="tlabel">Cream on dark</span><div id="mono-d"></div></div>
+    </div>
+  </div>
+
+  <!-- PALETTE -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">Palette</h2><span class="tag">Gradient · Neutrals</span></div>
+    <div class="pad">
+      <div class="sw" id="swatches"></div>
+    </div>
+  </div>
+
+  <!-- IN USE -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">In use</h2><span class="tag">Context</span></div>
+    <div class="pad" style="background:var(--cream);">
+      <div class="row" style="align-items:flex-end;">
+        <div class="col" style="flex:0 0 auto;">
+          <div class="mock-tab"><span id="tab-ico"></span> Wombat</div>
+        </div>
+        <div class="col" style="flex:0 0 auto;">
+          <div class="mock-dock"><div class="appbox" id="dock-ico"></div></div>
+        </div>
+        <div class="col" style="flex:0 0 auto;">
+          <button class="mock-btn"><span id="btn-ico"></span> New script</button>
+        </div>
+        <div class="col" style="flex:0 0 auto;">
+          <div class="mock-win">
+            <div class="bar">
+              <span class="d" style="background:#ff5f57"></span><span class="d" style="background:#febc2e"></span><span class="d" style="background:#28c840"></span>
+              <span class="ttl"><span id="win-ico"></span> session_03.funscript</span>
+            </div>
+            <div class="body"><span id="win-mark"></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FILES -->
+  <div class="panel">
+    <div class="panel-head"><h2 class="sec">Deliverables</h2><span class="tag">SVG + PNG</span></div>
+    <div class="pad">
+      <div class="files">
+        <div class="file"><span class="ext">SVG</span><div><div class="fn">wombat-mark.svg</div><div class="fd">The icon — self-contained vector</div></div></div>
+        <div class="file"><span class="ext">SVG</span><div><div class="fn">wombat-appicon.svg</div><div class="fd">Dark squircle app icon</div></div></div>
+        <div class="file"><span class="ext">SVG</span><div><div class="fn">wombat-mono.svg</div><div class="fd">One-color, background-agnostic</div></div></div>
+        <div class="file"><span class="ext">SVG</span><div><div class="fn">wombat-lockup.svg</div><div class="fd">Icon + wordmark</div></div></div>
+        <div class="file"><span class="ext">PNG</span><div><div class="fn">mark · 1024 → 32</div><div class="fd">Transparent, multiple sizes</div></div></div>
+        <div class="file"><span class="ext">PNG</span><div><div class="fn">app icon · 1024–256</div><div class="fd">Ready for stores &amp; docks</div></div></div>
+      </div>
+      <p class="note" style="margin-top:18px;">Tagline placeholder is <strong>“Funscript Studio”</strong> — say the word and I'll swap it (or drop it). PNG files land in <strong>assets/png/</strong>.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---- mark builder (unique gradient id per call) ---- */
+function mark(size, opts){
+  opts = opts || {};
+  const feat = opts.feat || '#22282C';
+  const flat = opts.flat || null;      // single solid color (mono)
+  const id = 'g'+Math.random().toString(36).slice(2,8);
+  const stroke = flat || `url(#${id})`;
+  const earFill = flat || `url(#${id})`;
+  const grad = flat ? '' : `<defs><linearGradient id="${id}" x1="34" y1="0" x2="206" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF6B4A"/><stop offset="0.5" stop-color="#F2913C"/><stop offset="1" stop-color="#16B7A6"/>
+    </linearGradient></defs>`;
+  // mono uses eye-knockout via mask so eyes read on any bg
+  if(flat){
+    const mid='m'+Math.random().toString(36).slice(2,8);
+    return `<svg width="${size}" height="${size*0.75}" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs><mask id="${mid}"><rect width="240" height="180" fill="#fff"/><circle cx="97" cy="83" r="8.5" fill="#000"/><circle cx="145" cy="83" r="8.5" fill="#000"/></mask></defs>
+      <g fill="${flat}" mask="url(#${mid})">
+        <circle cx="34" cy="50" r="17"/><circle cx="206" cy="50" r="17"/>
+        <path d="M34 50 C 50 132 67 132 82 96 C 94 67 106 67 121 95 C 136 67 148 67 159 96 C 174 132 191 132 206 50" stroke="${flat}" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </g>
+      <ellipse cx="121" cy="108" rx="16" ry="12" fill="${flat}"/>
+    </svg>`;
+  }
+  return `<svg width="${size}" height="${size*0.75}" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg">
+    ${grad}
+    <circle cx="34" cy="50" r="17" fill="${earFill}"/>
+    <circle cx="206" cy="50" r="17" fill="${earFill}"/>
+    <path d="M34 50 C 50 132 67 132 82 96 C 94 67 106 67 121 95 C 136 67 148 67 159 96 C 174 132 191 132 206 50" stroke="${stroke}" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="97" cy="83" r="8.5" fill="${feat}"/>
+    <circle cx="145" cy="83" r="8.5" fill="${feat}"/>
+    <ellipse cx="121" cy="108" rx="16" ry="12" fill="${feat}"/>
+  </svg>`;
+}
+function appicon(size, radius){
+  const r = radius!=null ? radius : size*0.2227;
+  const inner = mark(size*0.625,{feat:'#F6EEE3'});
+  return `<div style="position:relative;width:${size}px;height:${size}px;background:#1B1F22;border-radius:${r}px;display:flex;align-items:center;justify-content:center;">${inner}</div>`;
+}
+function lockup(markSize, nameSize, opts){
+  opts=opts||{};
+  const rev = opts.rev;
+  const nameCol = rev ? '#F6EEE3' : '#22282C';
+  const tagCol = '#16B7A6';
+  const stacked = opts.stacked;
+  const tagline = opts.tagline ? `<span class="tag" style="color:${tagCol};font-size:${nameSize*0.16}px;letter-spacing:.3em;margin-top:${nameSize*0.16}px;">Funscript Studio</span>` : '';
+  const word = `<div class="word"><span class="name" style="font-size:${nameSize}px;color:${nameCol}">Wombat</span>${tagline}</div>`;
+  const m = mark(markSize, rev?{feat:'#F6EEE3'}:{});
+  if(stacked){
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:${markSize*0.16}px;">${m}${word}</div>`;
+  }
+  return `<div class="lockup" style="gap:${markSize*0.28}px;">${m}${word}</div>`;
+}
+
+/* ---- mount ---- */
+document.getElementById('hero').innerHTML = lockup(150, 96);
+document.getElementById('markBig').innerHTML = mark(240);
+document.getElementById('lk-h').innerHTML = lockup(74,48);
+document.getElementById('lk-s').innerHTML = lockup(80,44,{stacked:true});
+document.getElementById('lk-t').innerHTML = lockup(74,48,{tagline:true});
+document.getElementById('lk-r').innerHTML = lockup(74,48,{rev:true});
+
+document.getElementById('app256').innerHTML = appicon(176,40);
+document.getElementById('app64').innerHTML = appicon(64,14);
+document.getElementById('app48').innerHTML = appicon(48,11);
+document.getElementById('app32').innerHTML = appicon(32,8);
+document.getElementById('app16').innerHTML = appicon(16,4);
+
+document.getElementById('mono-l').innerHTML = mark(150,{flat:'#22282C'});
+document.getElementById('mono-d').innerHTML = mark(150,{flat:'#F6EEE3'});
+
+/* swatches */
+const PAL=[
+  ['Coral','#FF6B4A','in-point'],['Amber','#F2913C','mid'],['Teal','#16B7A6','out-point'],
+  ['Ink','#22282C','text · dark UI'],['Cream','#F6EEE3','surfaces']
+];
+document.getElementById('swatches').innerHTML = PAL.map(([n,h,d])=>`
+  <div class="chip"><div class="fill" style="background:${h}"></div><div class="meta"><div class="nm">${n}</div><div class="hx">${h}</div><div class="hx" style="opacity:.7">${d}</div></div></div>`).join('');
+
+/* in-use */
+document.getElementById('tab-ico').innerHTML = mark(18);
+document.getElementById('dock-ico').innerHTML = appicon(56,13);
+document.getElementById('btn-ico').innerHTML = mark(22,{feat:'#F6EEE3'});
+document.getElementById('win-ico').innerHTML = mark(16);
+document.getElementById('win-mark').innerHTML = mark(120,{feat:'#F6EEE3'});
+</script>
+</body>
+</html>

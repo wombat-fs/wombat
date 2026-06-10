@@ -354,9 +354,9 @@ def test_synthesize_cache_hit():
 def test_synthesize_cache_invalidated_by_editor():
     ed, ch = _editor((0.0, 0))
     _ = ch.synthesize()
-    assert ch._synthesis_cache is not None
+    assert ch._synthesis_cache  # populated
     ed.add_action(1.0, 50)
-    assert ch._synthesis_cache is None
+    assert not ch._synthesis_cache  # cleared (empty dict)
 
 
 def test_synthesize_after_edit_reflects_new_state():

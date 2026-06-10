@@ -16,7 +16,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from wombat.domain.action import Action, ActionList
-from wombat.domain.channel import BlendMode, Channel, Layer
+from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
 from wombat.domain.funscript_io import FunscriptError, load_funscript, save_funscript
 
 PROJECT_VERSION = 1
@@ -246,6 +246,8 @@ def _layer_to_dict(layer: Layer) -> dict:
         "span": list(layer.span) if layer.span else None,
         "fade_in": layer.fade_in,
         "fade_out": layer.fade_out,
+        "center": layer.center,
+        "fade_curve": layer.fade_curve.value,
         "actions": [{"at": a.at, "pos": a.pos} for a in layer.actions],
     }
 
@@ -266,6 +268,8 @@ def _layer_from_dict(d: dict) -> Layer:
         span=span,
         fade_in=float(d.get("fade_in", 0.0)),
         fade_out=float(d.get("fade_out", 0.0)),
+        center=int(d.get("center", 50)),
+        fade_curve=FadeCurve(d.get("fade_curve", "smooth")),
     )
 
 

@@ -169,13 +169,13 @@ def test_multi_target_undo_restores_all():
 def test_undo_invalidates_synthesis_cache():
     ch = _channel("c", (0.0, 0))
     _ = ch.synthesize()  # warm cache
-    assert ch._synthesis_cache is not None
+    assert ch._synthesis_cache  # warm (non-empty)
 
     stack = UndoStack()
     stack.snapshot("add", [(ch, 0)], frozenset())
     ch.layers[0].actions.add(Action(1.0, 100))
     stack.undo()
-    assert ch._synthesis_cache is None  # invalidated
+    assert not ch._synthesis_cache  # invalidated (empty dict)
 
 
 # ------------------------------------------------------------------ descriptions

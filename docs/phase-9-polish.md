@@ -65,5 +65,11 @@ A pragmatic "make it feel like a real app" first wave, by value/cost:
 ## Open scope questions (decide before committing effort)
 
 - **Real-device output (E):** is live hardware preview (Intiface/T-code) in scope for Wombat, or is the visual **simulator** sufficient? The README is silent; it focuses on authoring. This changes whether E grows into its own phase.
+
+User notes: Real-device output is out of scope for now. Visual simulator is enough.
+
 - **Plugin language/sandbox (D):** unrestricted Python plugins (powerful, trust-based) vs a constrained API surface. Affects security posture.
+
 - **AI-assisted features:** the README puts *AI generation* out of scope — confirm that also excludes lighter AI assists (e.g. suggestion/cleanup), or just full generation.
+
+User notes: I can see the value of an AI generation plugin eventually, but it doesn't have high priority. Lighter AI assists are probably a good idea though.

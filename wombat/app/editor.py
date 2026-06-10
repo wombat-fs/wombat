@@ -3,18 +3,19 @@
 All writes go through here: snapshot undo, mutate the active layer,
 invalidate the synthesis cache, emit signals so the timeline repaints.
 
-Selection is per-channel: switching active channel preserves each channel's
-selection and restores the new channel's previous selection.
+Selection is per-(channel, layer): switching channels or layers preserves
+each combination's previous selection independently.
 """
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 
 from wombat.app.undo import UndoStack
 from wombat.domain.action import Action, ActionList
-from wombat.domain.channel import Channel
+from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
 
 if __debug__:
     from typing import TYPE_CHECKING
@@ -24,9 +25,10 @@ if __debug__:
 
 
 class EditorController(QObject):
-    actions_changed = Signal()      # a channel's actions mutated → repaint / re-export
+    actions_changed = Signal()          # a layer's actions mutated → repaint / re-export
     selection_changed = Signal()
-    history_changed = Signal()      # can_undo / can_redo may have changed
+    history_changed = Signal()          # can_undo / can_redo may have changed
+    layer_structure_changed = Signal()  # layers added/removed/reordered/property changed
 
     def __init__(
         self,
@@ -39,7 +41,8 @@ class EditorController(QObject):
         self._player = player
         self._undo = undo
         self._active_idx: int = 0               # index into project.channels
-        self._selections: dict[int, frozenset[float]] = {}  # per-channel
+        self._active_layer_indices: dict[int, int] = {}   # ch_idx → layer_idx
+        self._selections: dict[tuple[int, int], frozenset[float]] = {}  # (ch,layer) → sel
         self._clipboard: list[Action] = []
         self._snap_to_frame: bool = False
         # gesture state
@@ -51,12 +54,13 @@ class EditorController(QObject):
     def set_project(self, project: Project) -> None:
         self._project = project
         self._active_idx = 0
+        self._active_layer_indices = {}
         self._selections = {}
         self._clipboard = []
         self._pre_move_snapshot = ActionList()
         self._pre_move_selection = frozenset()
 
-    # ----------------------------------------------------------------- active
+    # ----------------------------------------------------------------- active channel
 
     @property
     def has_active_channel(self) -> bool:
@@ -66,13 +70,26 @@ class EditorController(QObject):
     def active_channel(self) -> Channel:
         return self._project.channels[self._active_idx]
 
-    @property
-    def active_layer_index(self) -> int:
-        return 0  # base layer; Phase 6 will expose layer selection
-
     def set_active_channel_index(self, index: int) -> None:
         self._active_idx = index
         self.selection_changed.emit()
+
+    # ----------------------------------------------------------------- active layer
+
+    @property
+    def active_layer_index(self) -> int:
+        idx = self._active_layer_indices.get(self._active_idx, 0)
+        if self.has_active_channel:
+            idx = max(0, min(idx, len(self.active_channel.layers) - 1))
+        return idx
+
+    def set_active_layer_index(self, layer_idx: int) -> None:
+        if not self.has_active_channel:
+            return
+        layer_idx = max(0, min(layer_idx, len(self.active_channel.layers) - 1))
+        self._active_layer_indices[self._active_idx] = layer_idx
+        self.selection_changed.emit()
+        self.layer_structure_changed.emit()
 
     def _layer(self) -> ActionList:
         return self.active_channel.layers[self.active_layer_index].actions
@@ -84,10 +101,11 @@ class EditorController(QObject):
 
     @property
     def selection(self) -> frozenset[float]:
-        return self._selections.get(self._active_idx, frozenset())
+        key = (self._active_idx, self.active_layer_index)
+        return self._selections.get(key, frozenset())
 
     def _set_selection(self, s: frozenset[float]) -> None:
-        self._selections[self._active_idx] = s
+        self._selections[(self._active_idx, self.active_layer_index)] = s
 
     # ----------------------------------------------------------------- options
 
@@ -354,6 +372,351 @@ class EditorController(QObject):
         self._emit_actions()
         self.selection_changed.emit()
 
+    # ----------------------------------------------------------------- layer structural ops
+
+    def add_layer(
+        self,
+        name: str = "layer",
+        *,
+        blend: BlendMode = BlendMode.OVERRIDE,
+        span: tuple[float, float] | None = None,
+    ) -> None:
+        """Add a new empty layer above the current active layer."""
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        self._undo.snapshot_structural("Add layer", ch, self.active_layer_index, self.selection)
+        new_layer = Layer(actions=ActionList(), name=name, blend=blend, span=span)
+        insert_at = self.active_layer_index + 1
+        ch.layers.insert(insert_at, new_layer)
+        self._active_layer_indices[self._active_idx] = insert_at
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def duplicate_layer(self, index: int | None = None) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        li = self.active_layer_index if index is None else index
+        if not (0 <= li < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Duplicate layer", ch, self.active_layer_index, self.selection)
+        dup = copy.deepcopy(ch.layers[li])
+        dup.name = dup.name + " copy"
+        ch.layers.insert(li + 1, dup)
+        self._active_layer_indices[self._active_idx] = li + 1
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def remove_layer(self, index: int | None = None) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        li = self.active_layer_index if index is None else index
+        if not (0 <= li < len(ch.layers)):
+            return
+        if len(ch.layers) == 1:
+            return  # always keep at least one layer
+        self._undo.snapshot_structural("Remove layer", ch, self.active_layer_index, self.selection)
+        del ch.layers[li]
+        new_li = max(0, min(li, len(ch.layers) - 1))
+        self._active_layer_indices[self._active_idx] = new_li
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def reorder_layer(self, src: int, dst: int) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        n = len(ch.layers)
+        if not (0 <= src < n and 0 <= dst < n and src != dst):
+            return
+        self._undo.snapshot_structural("Reorder layer", ch, self.active_layer_index, self.selection)
+        layer = ch.layers.pop(src)
+        ch.layers.insert(dst, layer)
+        if self.active_layer_index == src:
+            self._active_layer_indices[self._active_idx] = dst
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_blend(self, index: int, blend: BlendMode) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Set blend", ch, self.active_layer_index, self.selection)
+        ch.layers[index].blend = blend
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_center(self, index: int, center: int) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Set center", ch, self.active_layer_index, self.selection)
+        ch.layers[index].center = max(0, min(100, center))
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_span(self, index: int, span: tuple[float, float] | None) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Set span", ch, self.active_layer_index, self.selection)
+        ch.layers[index].span = span
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_fades(self, index: int, fade_in: float, fade_out: float) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Set fades", ch, self.active_layer_index, self.selection)
+        ch.layers[index].fade_in = max(0.0, fade_in)
+        ch.layers[index].fade_out = max(0.0, fade_out)
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_fade_curve(self, index: int, curve: FadeCurve) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Set fade curve", ch, self.active_layer_index, self.selection)
+        ch.layers[index].fade_curve = curve
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def set_layer_enabled(self, index: int, enabled: bool) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Toggle layer", ch, self.active_layer_index, self.selection)
+        ch.layers[index].enabled = enabled
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    # ----------------------------------------------------------------- span/fade live drag gestures
+
+    def begin_span_drag(self, layer_idx: int) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        self._undo.begin_structural("Set span", ch, self.active_layer_index, self.selection)
+
+    def update_span_live(self, layer_idx: int, span: tuple[float, float] | None) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if 0 <= layer_idx < len(ch.layers):
+            ch.layers[layer_idx].span = span
+            ch._invalidate_cache()
+            self._emit_structure()
+
+    def end_span_drag(self) -> None:
+        self._undo.commit()
+        self.history_changed.emit()
+
+    def begin_fade_drag(self, layer_idx: int) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        self._undo.begin_structural("Set fades", ch, self.active_layer_index, self.selection)
+
+    def update_fades_live(self, layer_idx: int, fade_in: float, fade_out: float) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if 0 <= layer_idx < len(ch.layers):
+            ch.layers[layer_idx].fade_in = max(0.0, fade_in)
+            ch.layers[layer_idx].fade_out = max(0.0, fade_out)
+            ch._invalidate_cache()
+            self._emit_structure()
+
+    def end_fade_drag(self) -> None:
+        self._undo.commit()
+        self.history_changed.emit()
+
+    def rename_layer(self, index: int, name: str) -> None:
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= index < len(ch.layers)):
+            return
+        self._undo.snapshot_structural("Rename layer", ch, self.active_layer_index, self.selection)
+        ch.layers[index].name = name
+        self._emit_structure()
+
+    # ----------------------------------------------------------------- snippets
+
+    def insert_snippet_as_layer(
+        self,
+        snippet: object,
+        span: tuple[float, float],
+        *,
+        blend: BlendMode = BlendMode.ADDITIVE,
+        name: str = "snippet",
+        fade_in: float = 0.0,
+        fade_out: float = 0.0,
+    ) -> None:
+        """Generate snippet content and insert it as a new layer. One undo step.
+
+        The base sampler passed to generate() is the current synthesis of the
+        active channel — so base-dependent pos algorithms read the right signal.
+        """
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        base_al = ch.synthesize()
+        fps = (1.0 / self._player.frame_time) if self._player.frame_time > 0 else None
+        actions = snippet.generate(  # type: ignore[union-attr]
+            span,
+            base=base_al,
+            fps=fps,
+            snap_to_frame=self._snap_to_frame,
+        )
+        self._undo.snapshot_structural(
+            "Insert snippet", ch, self.active_layer_index, self.selection
+        )
+        insert_at = self.active_layer_index + 1
+        new_layer = Layer(
+            actions=actions,
+            name=name,
+            blend=blend,
+            span=span,
+            fade_in=fade_in,
+            fade_out=fade_out,
+        )
+        ch.layers.insert(insert_at, new_layer)
+        self._active_layer_indices[self._active_idx] = insert_at
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def fill_layer_with_snippet(
+        self,
+        layer_index: int,
+        snippet: object,
+        span: tuple[float, float],
+    ) -> None:
+        """Replace an existing layer's actions with generated snippet content. One undo step.
+
+        The base sampler is synthesized from layers below `layer_index`.
+        """
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= layer_index < len(ch.layers)):
+            return
+        from wombat.domain.synthesis import synthesize
+        layers_below = ch.layers[:layer_index]
+        base_al = synthesize(layers_below) if layers_below else None
+        fps = (1.0 / self._player.frame_time) if self._player.frame_time > 0 else None
+        actions = snippet.generate(  # type: ignore[union-attr]
+            span,
+            base=base_al,
+            fps=fps,
+            snap_to_frame=self._snap_to_frame,
+        )
+        self._undo.snapshot("Fill layer with snippet", [(ch, layer_index)], self.selection)
+        ch.layers[layer_index].actions = actions
+        ch._invalidate_cache()
+        self._emit_actions()
+
+    # ----------------------------------------------------------------- event application
+
+    def apply_event_layers(
+        self,
+        insertions: list[tuple[str, object]],
+        description: str = "Apply event",
+    ) -> None:
+        """Insert layers into multiple channels as one undo step.
+
+        Args:
+            insertions: List of (channel_name, Layer) pairs from translate_event().
+                        Layers for unknown channel names are skipped with a warning.
+            description: Undo entry description.
+        """
+        if not insertions:
+            return
+
+        # Resolve channel names to Channel objects; warn and skip unknowns
+        ch_map = {ch.name: ch for ch in self._project.channels}
+        resolved: list[tuple[object, object]] = []  # (Channel, Layer)
+        for ch_name, layer in insertions:
+            ch = ch_map.get(ch_name)
+            if ch is None:
+                import warnings
+                warnings.warn(
+                    f"Event targets channel {ch_name!r} which does not exist — skipped",
+                    stacklevel=2,
+                )
+                continue
+            resolved.append((ch, layer))
+
+        if not resolved:
+            return
+
+        # Snapshot all affected channels (de-duplicated) in one undo entry
+        seen: dict[int, tuple[object, int]] = {}  # id(ch) -> (ch, active_layer_idx)
+        for ch, _ in resolved:
+            if id(ch) not in seen:
+                ch_idx = self._channel_index(ch)  # type: ignore[arg-type]
+                ali = self._active_layer_indices.get(ch_idx or 0, 0) if ch_idx is not None else 0
+                seen[id(ch)] = (ch, ali)
+
+        self._undo.snapshot_multi_structural(
+            description,
+            [(ch, ali) for ch, ali in seen.values()],  # type: ignore[misc]
+            self.selection,
+        )
+
+        # Insert each layer at the top of its channel's layer stack
+        for ch, layer in resolved:
+            ch.layers.append(layer)  # type: ignore[union-attr]
+            ch._invalidate_cache()  # type: ignore[union-attr]
+
+        self._emit_structure()
+
+    # ----------------------------------------------------------------- recording gesture
+
+    def begin_recording(self) -> None:
+        """Open a recording gesture: all subsequent ``record_action`` calls form one undo step."""
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        li = self.active_layer_index
+        self._undo.begin("Record", [(ch, li)], self.selection)
+
+    def record_action(self, at: float, pos: int) -> None:
+        """Insert a sampled action without creating a new undo entry (inside a recording gesture)."""
+        if not self.has_active_channel:
+            return
+        at = max(0.0, at)
+        self._layer().add(Action(at, pos))
+        self.active_channel._invalidate_cache()
+        self.actions_changed.emit()
+
+    def end_recording(self) -> None:
+        """Commit the recording gesture as a single undo entry."""
+        self._undo.commit()
+        self.history_changed.emit()
+
+    def cancel_recording(self) -> None:
+        """Abandon the recording gesture and restore pre-recording state."""
+        self._undo.cancel()
+        self.actions_changed.emit()
+        self.history_changed.emit()
+
     # ----------------------------------------------------------------- history
 
     def undo(self) -> None:
@@ -362,10 +725,15 @@ class EditorController(QObject):
             for snap in entry.snapshots:
                 ch_idx = self._channel_index(snap.channel)
                 if ch_idx is not None:
-                    self._selections[ch_idx] = snap.selection
+                    self._selections[(ch_idx, snap.layer_index)] = snap.selection
+            for snap in entry.structural:
+                ch_idx = self._channel_index(snap.channel)
+                if ch_idx is not None:
+                    self._active_layer_indices[ch_idx] = snap.active_layer_index
             self._emit_actions()
             self.selection_changed.emit()
             self.history_changed.emit()
+            self.layer_structure_changed.emit()
 
     def redo(self) -> None:
         entry = self._undo.redo(self.selection)
@@ -373,10 +741,15 @@ class EditorController(QObject):
             for snap in entry.snapshots:
                 ch_idx = self._channel_index(snap.channel)
                 if ch_idx is not None:
-                    self._selections[ch_idx] = snap.selection
+                    self._selections[(ch_idx, snap.layer_index)] = snap.selection
+            for snap in entry.structural:
+                ch_idx = self._channel_index(snap.channel)
+                if ch_idx is not None:
+                    self._active_layer_indices[ch_idx] = snap.active_layer_index
             self._emit_actions()
             self.selection_changed.emit()
             self.history_changed.emit()
+            self.layer_structure_changed.emit()
 
     @property
     def can_undo(self) -> bool:
@@ -395,5 +768,10 @@ class EditorController(QObject):
             return None
 
     def _emit_actions(self) -> None:
+        self.actions_changed.emit()
+        self.history_changed.emit()
+
+    def _emit_structure(self) -> None:
+        self.layer_structure_changed.emit()
         self.actions_changed.emit()
         self.history_changed.emit()

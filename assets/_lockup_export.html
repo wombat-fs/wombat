@@ -1,0 +1,21 @@
+<!DOCTYPE html><html><head><meta charset="utf-8" />
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600&display=swap" rel="stylesheet" />
+<style>
+  html,body{margin:0;padding:0;width:100%;height:100vh;}
+  body{display:flex;align-items:center;justify-content:center;}
+  #stage{display:flex;align-items:center;gap:30px;}
+  .name{font-family:"Fredoka",sans-serif;font-weight:600;font-size:128px;line-height:1;letter-spacing:-2px;}
+</style></head>
+<body>
+<div id="stage"></div>
+<script>
+const MARK=(feat)=>`<svg width="200" height="150" viewBox="0 0 240 180" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="lg" x1="34" y1="0" x2="206" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FF6B4A"/><stop offset="0.5" stop-color="#F2913C"/><stop offset="1" stop-color="#16B7A6"/></linearGradient></defs><circle cx="34" cy="50" r="17" fill="url(#lg)"/><circle cx="206" cy="50" r="17" fill="url(#lg)"/><path d="M34 50 C 50 132 67 132 82 96 C 94 67 106 67 121 95 C 136 67 148 67 159 96 C 174 132 191 132 206 50" stroke="url(#lg)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="97" cy="83" r="8.5" fill="${feat}"/><circle cx="145" cy="83" r="8.5" fill="${feat}"/><ellipse cx="121" cy="108" rx="16" ry="12" fill="${feat}"/></svg>`;
+function show(mode){
+  const dark = mode==='dark';
+  document.body.style.background = dark ? '#1B1F22' : '#F6EEE3';
+  const feat = dark ? '#F6EEE3' : '#22282C';
+  document.getElementById('stage').innerHTML = MARK(feat) + `<span class="name" style="color:${dark?'#F6EEE3':'#22282C'}">Wombat</span>`;
+}
+show('cream'); window.show = show;
+</script>
+</body></html>

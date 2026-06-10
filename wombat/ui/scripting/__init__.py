@@ -1,3 +1,8 @@
-from wombat.ui.scripting.mode import DefaultMode, ScriptingMode
+from wombat.ui.scripting.mode import (
+    AlternatingMode,
+    DefaultMode,
+    RecordingMode,
+    ScriptingMode,
+)
 
-__all__ = ["ScriptingMode", "DefaultMode"]
+__all__ = ["ScriptingMode", "DefaultMode", "AlternatingMode", "RecordingMode"]
