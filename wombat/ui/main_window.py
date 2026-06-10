@@ -1,14 +1,20 @@
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QDockWidget,
+    QFileDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QVBoxLayout,
+    QWidget,
 )
 
+from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
+from wombat.ui.mpv_widget import MpvWidget
+from wombat.ui.transport import TransportBar
 
 log = logging.getLogger(__name__)
 
@@ -20,18 +26,30 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Wombat")
         self.setMinimumSize(900, 600)
 
+        self._player = VideoPlayer()
+
         self._build_central()
         self._build_docks()
         self._build_menus()
         self._restore_state()
 
+        self._player.video_loaded.connect(self._on_video_loaded)
+
     # ------------------------------------------------------------------ layout
 
     def _build_central(self) -> None:
-        placeholder = QLabel("Video — coming in Phase 1")
-        placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet("color: #888; font-size: 18px;")
-        self.setCentralWidget(placeholder)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._mpv_widget = MpvWidget(self._player.mpv)
+        self._transport = TransportBar(self._player)
+
+        layout.addWidget(self._mpv_widget, stretch=1)
+        layout.addWidget(self._transport)
+
+        self.setCentralWidget(container)
 
     def _build_docks(self) -> None:
         self._timeline_dock = self._make_dock(
@@ -68,7 +86,9 @@ class MainWindow(QMainWindow):
 
         # File
         file_menu = mb.addMenu("&File")
-        file_menu.addAction("Open Media…").setEnabled(False)
+        open_media_action = file_menu.addAction("Open Media…")
+        open_media_action.setShortcut("Ctrl+O")
+        open_media_action.triggered.connect(self._open_media)
         file_menu.addAction("Open Funscript…").setEnabled(False)
         file_menu.addAction("Save Project").setEnabled(False)
         file_menu.addSeparator()
@@ -104,9 +124,28 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._settings.save_geometry(self.saveGeometry())
         self._settings.save_dock_state(self.saveState())
+        # Free render context before mpv terminates
+        self._mpv_widget.closeEvent(event)
+        self._player.shutdown()
         super().closeEvent(event)
 
     # ----------------------------------------------------------------- actions
+
+    @Slot()
+    def _open_media(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Media",
+            "",
+            "Video Files (*.mp4 *.mkv *.avi *.mov *.webm *.m4v *.wmv *.flv);;All Files (*)",
+        )
+        if path:
+            self._player.load(path)
+
+    @Slot(str)
+    def _on_video_loaded(self, path: str) -> None:
+        self.setWindowTitle(f"Wombat — {path.split('/')[-1]}")
+        log.info("Loaded: %s", path)
 
     def _show_about(self) -> None:
         QMessageBox.about(
@@ -114,5 +153,5 @@ class MainWindow(QMainWindow):
             "About Wombat",
             "<b>Wombat</b><br>"
             "Cross-platform funscript authoring and editing tool.<br><br>"
-            "Version 0.1.0 — Phase 0 scaffold",
+            "Version 0.1.0 — Phase 1 (Video Playback)",
         )
