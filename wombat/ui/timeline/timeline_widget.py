@@ -56,9 +56,9 @@ _DRAG_THRESHOLD = 4   # pixels before a press becomes a rubber-band drag
 
 _BG = QColor("#1c1c1c")
 _RULER_BG = QColor("#2a2a2a")
-_RULER_FG = QColor("#555555")
+_RULER_FG = QColor("#666666")
 _GUIDE = QColor(255, 255, 255, 18)
-_LABEL_FG = QColor("#666666")
+_LABEL_FG = QColor("#bbbbbb")
 _PLAYHEAD_COLOR = QColor("#ffffff")
 _SEL_COLOR = QColor("#ffffff")
 _RUBBER_BAND_FILL = QColor(255, 255, 255, 20)
@@ -517,6 +517,9 @@ class TimelineWidget(QWidget):
         t0, t1 = self._viewport.time_window()
         first_tick = math.ceil(t0 / interval) * interval
 
+        font = painter.font()
+        font.setPointSizeF(font.pointSizeF() * 1.15)
+        painter.setFont(font)
         fm = painter.fontMetrics()
         t = first_tick
         while t <= t1 + interval * 0.01:
@@ -528,7 +531,7 @@ class TimelineWidget(QWidget):
                 lw = fm.horizontalAdvance(label)
                 if x + 3 + lw <= self.width():
                     painter.setPen(_LABEL_FG)
-                    painter.drawText(x + 3, _RULER_H - 9, label)
+                    painter.drawText(x + 3, _RULER_H - 7, label)
             t += interval
 
     def _draw_lane(
