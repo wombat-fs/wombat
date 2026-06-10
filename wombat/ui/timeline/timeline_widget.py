@@ -1,19 +1,30 @@
-"""TimelineWidget — read-only channel-lane canvas with playhead and zoom/pan.
+"""TimelineWidget — channel-lane canvas with playhead, zoom/pan, and editing.
 
 Paint order per frame:
   1. Background fill
   2. Ruler strip (top)
   3. Per-lane: height guides → line segments → action nodes → channel label
-  4. Playhead (on top of everything)
+  4. Rubber-band rectangle (if dragging)
+  5. Playhead (on top of everything)
+
+Mouse interactions (requires EditorController via set_editor()):
+  Left-click empty lane  → ScriptingMode.add_point
+  Left-drag empty area   → rubber-band select (moves > _DRAG_THRESHOLD px)
+  Left-click action node → select (Shift/Ctrl = additive)
+  Left-drag action node  → move selection as one undo step
+  Ruler click            → seek
 """
 from __future__ import annotations
 
 import math
 from dataclasses import replace
+from enum import Enum, auto
+from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRect, QSize, Qt, Slot
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Slot
 from PySide6.QtGui import (
     QColor,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -23,32 +34,42 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from wombat.domain.action import Action
 from wombat.domain.channel import Channel
 from wombat.playback.player import VideoPlayer
 from wombat.ui.timeline.heatmap import speed_color
 from wombat.ui.timeline.viewport import Viewport
 
+if TYPE_CHECKING:
+    from wombat.app.editor import EditorController
+    from wombat.ui.scripting.mode import ScriptingMode
+
 # ------------------------------------------------------------------ constants
 
-_RULER_H = 24          # ruler strip height in pixels
-_POINT_R = 3           # action node radius
+_RULER_H = 24
+_POINT_R = 3
+_SEL_R = 5            # selected node radius
+_DRAG_THRESHOLD = 4   # pixels before a press becomes a rubber-band drag
 
 _BG = QColor("#1c1c1c")
 _RULER_BG = QColor("#2a2a2a")
-_RULER_FG = QColor("#555555")    # tick marks and ruler border
+_RULER_FG = QColor("#555555")
 _GUIDE = QColor(255, 255, 255, 18)
 _LABEL_FG = QColor("#666666")
 _PLAYHEAD_COLOR = QColor("#ffffff")
+_SEL_COLOR = QColor("#ffffff")
+_RUBBER_BAND_FILL = QColor(255, 255, 255, 20)
+_RUBBER_BAND_BORDER = QColor(255, 255, 255, 120)
 
 _LANE_COLORS: list[QColor] = [
-    QColor("#00a8e8"),   # blue    — primary
-    QColor("#e87d00"),   # orange
-    QColor("#00e8a8"),   # teal
-    QColor("#e8e800"),   # yellow
-    QColor("#e800a8"),   # magenta
+    QColor("#00a8e8"),
+    QColor("#e87d00"),
+    QColor("#00e8a8"),
+    QColor("#e8e800"),
+    QColor("#e800a8"),
 ]
 
-_DIM = 0.35   # inactive lane brightness multiplier
+_DIM = 0.35
 
 
 # ------------------------------------------------------------------ helpers
@@ -81,6 +102,15 @@ def _dim_color(c: QColor, factor: float) -> QColor:
     return QColor(int(c.red() * factor), int(c.green() * factor), int(c.blue() * factor))
 
 
+# ------------------------------------------------------------------ drag state
+
+class _DragMode(Enum):
+    NONE = auto()
+    PENDING = auto()      # pressed on empty area; waiting to see click vs drag
+    RUBBER_BAND = auto()
+    MOVE = auto()
+
+
 # ------------------------------------------------------------------ widget
 
 class TimelineWidget(QWidget):
@@ -101,7 +131,20 @@ class TimelineWidget(QWidget):
         self._follow_fraction: float = 0.5
         self._show_heatmap: bool = False
 
+        # editing state
+        self._editor: EditorController | None = None
+        self._scripting_mode: ScriptingMode
+        from wombat.ui.scripting.mode import DefaultMode
+        self._scripting_mode = DefaultMode()
+        self._drag_mode: _DragMode = _DragMode.NONE
+        self._drag_start: QPointF = QPointF()
+        self._drag_current: QPointF = QPointF()
+        # for move gesture: total delta is computed vs press position
+        self._move_press_t: float = 0.0
+        self._move_press_p: float = 0.0
+
         self.setMinimumHeight(60)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         player.position_changed.connect(self._on_position)
         player.playback_changed.connect(self._on_playback_changed)
@@ -116,6 +159,17 @@ class TimelineWidget(QWidget):
     def set_heatmap(self, enabled: bool) -> None:
         self._show_heatmap = enabled
         self.update()
+
+    def set_editor(self, editor: EditorController) -> None:
+        if self._editor is not None:
+            self._editor.actions_changed.disconnect(self.update)
+            self._editor.selection_changed.disconnect(self.update)
+        self._editor = editor
+        editor.actions_changed.connect(self.update)
+        editor.selection_changed.connect(self.update)
+
+    def set_scripting_mode(self, mode: ScriptingMode) -> None:
+        self._scripting_mode = mode
 
     def sizeHint(self) -> QSize:
         return QSize(800, 120)
@@ -159,10 +213,181 @@ class TimelineWidget(QWidget):
         event.accept()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.position().y() < _RULER_H:
-            t = self._viewport.x_to_time(float(event.position().x()))
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+
+        x = float(event.position().x())
+        y = float(event.position().y())
+
+        # Ruler → seek
+        if y < _RULER_H:
+            t = self._viewport.x_to_time(x)
             self._player.seek_exact(t)
+            event.accept()
+            return
+
+        if self._editor is None or not self._editor.has_active_channel:
+            event.accept()
+            return
+
+        lane_vp = self._active_lane_vp()
+        t = lane_vp.x_to_time(x)
+        p_at_y = lane_vp.y_to_pos(y)
+
+        hit = self._hit_test(t, lane_vp)
+        additive = bool(
+            event.modifiers()
+            & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+        )
+
+        if hit is not None:
+            # Select + start move drag
+            if hit.at not in self._editor.selection or not additive:
+                self._editor.select(hit.at, additive=additive)
+            self._drag_mode = _DragMode.MOVE
+            self._drag_start = event.position()
+            self._drag_current = event.position()
+            self._move_press_t = t
+            self._move_press_p = p_at_y
+            self._editor.begin_move()
+        else:
+            # Empty lane press — pending (click = add, drag = rubber-band)
+            self._drag_mode = _DragMode.PENDING
+            self._drag_start = event.position()
+            self._drag_current = event.position()
+
+        self._follow = False
         event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_mode == _DragMode.NONE:
+            return
+
+        self._drag_current = event.position()
+        dx = self._drag_current.x() - self._drag_start.x()
+        dy = self._drag_current.y() - self._drag_start.y()
+
+        if self._drag_mode == _DragMode.PENDING:
+            dist = math.hypot(dx, dy)
+            if dist >= _DRAG_THRESHOLD:
+                self._drag_mode = _DragMode.RUBBER_BAND
+
+        elif self._drag_mode == _DragMode.RUBBER_BAND:
+            self.update()
+
+        elif self._drag_mode == _DragMode.MOVE:
+            if self._editor is not None:
+                lane_vp = self._active_lane_vp()
+                dt = dx / lane_vp.width * lane_vp.visible_time if lane_vp.width else 0.0
+                dp = int(-dy / lane_vp.lane_height * 100.0) if lane_vp.lane_height else 0
+                self._editor.move_selection(dt, dp)
+            self.update()
+
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+
+        mode = self._drag_mode
+        self._drag_mode = _DragMode.NONE
+
+        if mode == _DragMode.PENDING:
+            # No significant movement → add point
+            if self._editor is not None and self._editor.has_active_channel:
+                lane_vp = self._active_lane_vp()
+                x = float(self._drag_start.x())
+                y = float(self._drag_start.y())
+                t = lane_vp.x_to_time(x)
+                pos = int(round(max(0.0, min(100.0, lane_vp.y_to_pos(y)))))
+                self._scripting_mode.add_point(self._editor, t, pos)
+
+        elif mode == _DragMode.RUBBER_BAND:
+            if self._editor is not None:
+                lane_vp = self._active_lane_vp()
+                x0 = min(self._drag_start.x(), self._drag_current.x())
+                x1 = max(self._drag_start.x(), self._drag_current.x())
+                t0 = lane_vp.x_to_time(float(x0))
+                t1 = lane_vp.x_to_time(float(x1))
+                additive = bool(
+                    event.modifiers()
+                    & (Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier)
+                )
+                self._editor.select_time_range(t0, t1, additive=additive)
+            self.update()
+
+        elif mode == _DragMode.MOVE:
+            if self._editor is not None:
+                self._editor.end_move()
+
+        event.accept()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self._editor is None:
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        mods = event.modifiers()
+        ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._editor.remove_selection()
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_Z:
+            self._editor.undo()
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_Y:
+            self._editor.redo()
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_C:
+            self._editor.copy()
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_X:
+            self._editor.cut()
+            event.accept()
+        elif ctrl and shift and key == Qt.Key.Key_V:
+            self._editor.paste_exact()
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_V:
+            self._editor.paste(self._player.logical_time)
+            event.accept()
+        elif ctrl and key == Qt.Key.Key_A:
+            self._editor.select_all()
+            event.accept()
+        elif key == Qt.Key.Key_P:
+            # Add point at playhead with pos 50 (keyboard authoring shortcut)
+            if self._editor.has_active_channel:
+                self._scripting_mode.add_point(self._editor, self._player.logical_time, 50)
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+
+    # ----------------------------------------------------------------- helpers
+
+    def _active_lane_vp(self) -> Viewport:
+        """Viewport for the active channel's lane (Phase 4: single lane = full area)."""
+        n = max(1, len(self._channels))
+        lane_area_top = _RULER_H
+        lane_area_h = max(1, self.height() - _RULER_H)
+        per_lane_h = lane_area_h // n
+        i = self._editor._active_idx if self._editor is not None else 0
+        i = max(0, min(n - 1, i))
+        top = lane_area_top + i * per_lane_h
+        h = per_lane_h if i < n - 1 else lane_area_h - i * per_lane_h
+        return replace(self._viewport, lane_top=top, lane_height=max(1, h))
+
+    def _hit_test(self, t: float, lane_vp: Viewport) -> Action | None:
+        if not self._editor or not self._editor.has_active_channel:
+            return None
+        actions = self._editor.active_channel.synthesize()
+        if not actions or lane_vp.width == 0:
+            return None
+        tol = (_POINT_R + 3) / lane_vp.width * lane_vp.visible_time
+        return actions.at_time(t, tol)
 
     # ----------------------------------------------------------------- paint
 
@@ -178,13 +403,17 @@ class TimelineWidget(QWidget):
         lane_area_h = max(1, self.height() - _RULER_H)
         per_lane_h = lane_area_h // num
 
+        sel = self._editor.selection if self._editor is not None else frozenset()
+
         for i, ch in enumerate(self._channels):
             top = lane_area_top + i * per_lane_h
-            # last lane gets any leftover pixels from integer division
             h = per_lane_h if i < num - 1 else lane_area_h - i * per_lane_h
             lane_vp = replace(self._viewport, lane_top=top, lane_height=max(1, h))
             color = _LANE_COLORS[i % len(_LANE_COLORS)]
-            self._draw_lane(painter, lane_vp, ch, i == self._active_index, color)
+            self._draw_lane(painter, lane_vp, ch, i == self._active_index, color, sel)
+
+        if self._drag_mode == _DragMode.RUBBER_BAND:
+            self._draw_rubber_band(painter)
 
         self._draw_playhead(painter)
         painter.end()
@@ -219,11 +448,11 @@ class TimelineWidget(QWidget):
         channel: Channel,
         is_active: bool,
         color: QColor,
+        selection: frozenset[float],
     ) -> None:
         actions = channel.synthesize()
         t0, t1 = lane_vp.time_window()
 
-        # horizontal position guides
         painter.setPen(QPen(_GUIDE, 1))
         for guide_pos in (0, 25, 50, 75, 100):
             y = int(lane_vp.pos_to_y(float(guide_pos)))
@@ -235,8 +464,6 @@ class TimelineWidget(QWidget):
             painter.drawText(4, lane_vp.lane_top + 14, channel.name)
             return
 
-        # cull: index_range gives [lo, hi) within [t0, t1]
-        # extend one action each side so edge-crossing segments are drawn
         lo, hi = actions.index_range(t0, t1)
         draw_lo = max(0, lo - 1)
         draw_hi = min(len(actions), hi + 1)
@@ -251,7 +478,6 @@ class TimelineWidget(QWidget):
         xs = [lane_vp.time_to_x(actions[i].at) for i in range(draw_lo, draw_hi)]
         ys = [lane_vp.pos_to_y(float(actions[i].pos)) for i in range(draw_lo, draw_hi)]
 
-        # line segments
         if self._show_heatmap:
             for j in range(len(xs) - 1):
                 a1 = actions[draw_lo + j]
@@ -266,18 +492,34 @@ class TimelineWidget(QWidget):
             for j in range(len(xs) - 1):
                 painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
 
-        # action nodes (only the truly visible slice, not the edge extras)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(line_color)
+        # Nodes: selected ones drawn larger and white; others normal
         for i in range(lo, hi):
-            x = int(lane_vp.time_to_x(actions[i].at))
-            y = int(lane_vp.pos_to_y(float(actions[i].pos)))
-            painter.drawEllipse(x - _POINT_R, y - _POINT_R, _POINT_R * 2, _POINT_R * 2)
+            a = actions[i]
+            x = int(lane_vp.time_to_x(a.at))
+            y = int(lane_vp.pos_to_y(float(a.pos)))
+            if a.at in selection:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(_SEL_COLOR)
+                painter.drawEllipse(x - _SEL_R, y - _SEL_R, _SEL_R * 2, _SEL_R * 2)
+            else:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(line_color)
+                painter.drawEllipse(x - _POINT_R, y - _POINT_R, _POINT_R * 2, _POINT_R * 2)
 
-        # channel name label
         painter.setPen(_LABEL_FG)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawText(4, lane_vp.lane_top + 14, channel.name)
+
+    def _draw_rubber_band(self, painter: QPainter) -> None:
+        x0 = min(self._drag_start.x(), self._drag_current.x())
+        y0 = min(self._drag_start.y(), self._drag_current.y())
+        x1 = max(self._drag_start.x(), self._drag_current.x())
+        y1 = max(self._drag_start.y(), self._drag_current.y())
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+        painter.fillRect(rect, _RUBBER_BAND_FILL)
+        painter.setPen(QPen(_RUBBER_BAND_BORDER, 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
 
     def _draw_playhead(self, painter: QPainter) -> None:
         x = int(self._viewport.time_to_x(self._playhead_time))

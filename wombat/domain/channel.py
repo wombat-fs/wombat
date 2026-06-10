@@ -37,17 +37,28 @@ class Layer:
 class Channel:
     name: str
     layers: list[Layer] = field(default_factory=list)   # layers[0] = base
+    _synthesis_cache: ActionList | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def _invalidate_cache(self) -> None:
+        self._synthesis_cache = None
 
     def synthesize(self) -> ActionList:
         """Return the synthesized ActionList for downstream consumption.
 
+        Memoized: call _invalidate_cache() after any layer mutation.
         Phase 2: returns a copy of the first enabled layer's actions.
         Phase 6: folds the full layer stack top-down with blend/span/fades.
         """
+        if self._synthesis_cache is not None:
+            return self._synthesis_cache
         for layer in self.layers:
             if layer.enabled:
-                return layer.actions.copy()
-        return ActionList()
+                self._synthesis_cache = layer.actions.copy()
+                return self._synthesis_cache
+        self._synthesis_cache = ActionList()
+        return self._synthesis_cache
 
     @classmethod
     def from_funscript(cls, fs: Funscript, name: str) -> Channel:
