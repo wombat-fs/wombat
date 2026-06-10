@@ -1,19 +1,23 @@
 import logging
+from pathlib import Path
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QDockWidget,
     QFileDialog,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
+from wombat.app.session import Session
+from wombat.domain.channel import Channel
+from wombat.domain.funscript_io import FunscriptError, load_funscript
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
 from wombat.ui.mpv_widget import MpvWidget
+from wombat.ui.timeline.timeline_widget import TimelineWidget
 from wombat.ui.transport import TransportBar
 
 log = logging.getLogger(__name__)
@@ -27,6 +31,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
 
         self._player = VideoPlayer()
+        self._session = Session(player=self._player)
 
         self._build_central()
         self._build_docks()
@@ -52,26 +57,29 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _build_docks(self) -> None:
-        self._timeline_dock = self._make_dock(
-            "Timeline",
-            "timelineDock",
-            "Timeline — coming in Phase 3",
-            Qt.DockWidgetArea.BottomDockWidgetArea,
-        )
-        self._channels_dock = self._make_dock(
+        self._timeline = TimelineWidget(self._player)
+
+        timeline_dock = QDockWidget("Timeline", self)
+        timeline_dock.setObjectName("timelineDock")
+        timeline_dock.setWidget(self._timeline)
+        self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, timeline_dock)
+        self._timeline_dock = timeline_dock
+
+        self._channels_dock = self._make_placeholder_dock(
             "Channels / Layers",
             "channelsDock",
             "Channels / Layers — coming in Phases 5–6",
             Qt.DockWidgetArea.RightDockWidgetArea,
         )
 
-    def _make_dock(
+    def _make_placeholder_dock(
         self,
         title: str,
         object_name: str,
         placeholder_text: str,
         area: Qt.DockWidgetArea,
     ) -> QDockWidget:
+        from PySide6.QtWidgets import QLabel
         dock = QDockWidget(title, self)
         dock.setObjectName(object_name)
         label = QLabel(placeholder_text)
@@ -84,29 +92,34 @@ class MainWindow(QMainWindow):
     def _build_menus(self) -> None:
         mb = self.menuBar()
 
-        # File
         file_menu = mb.addMenu("&File")
+
         open_media_action = file_menu.addAction("Open Media…")
         open_media_action.setShortcut("Ctrl+O")
         open_media_action.triggered.connect(self._open_media)
-        file_menu.addAction("Open Funscript…").setEnabled(False)
+
+        open_fs_action = file_menu.addAction("Open Funscript…")
+        open_fs_action.setShortcut("Ctrl+Shift+O")
+        open_fs_action.triggered.connect(self._open_funscript)
+
         file_menu.addAction("Save Project").setEnabled(False)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("&Quit")
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
 
-        # Edit
         edit_menu = mb.addMenu("&Edit")
         edit_menu.addAction("Undo").setEnabled(False)
         edit_menu.addAction("Redo").setEnabled(False)
 
-        # View
         view_menu = mb.addMenu("&View")
         view_menu.addAction(self._timeline_dock.toggleViewAction())
         view_menu.addAction(self._channels_dock.toggleViewAction())
 
-        # Help
+        heatmap_action = view_menu.addAction("Heatmap")
+        heatmap_action.setCheckable(True)
+        heatmap_action.toggled.connect(self._timeline.set_heatmap)
+
         help_menu = mb.addMenu("&Help")
         about_action = help_menu.addAction("About Wombat")
         about_action.triggered.connect(self._show_about)
@@ -124,7 +137,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._settings.save_geometry(self.saveGeometry())
         self._settings.save_dock_state(self.saveState())
-        # Free render context before mpv terminates
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
         super().closeEvent(event)
@@ -142,10 +154,39 @@ class MainWindow(QMainWindow):
         if path:
             self._player.load(path)
 
+    @Slot()
+    def _open_funscript(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Funscript",
+            "",
+            "Funscript Files (*.funscript);;All Files (*)",
+        )
+        if path:
+            self._load_funscript_path(path)
+
+    def _load_funscript_path(self, path: str) -> None:
+        try:
+            fs = load_funscript(path)
+        except (FunscriptError, OSError) as exc:
+            QMessageBox.warning(self, "Funscript Error", str(exc))
+            return
+        name = Path(path).stem
+        ch = Channel.from_funscript(fs, name=name)
+        self._session.channels.clear()
+        self._session.channels.append(ch)
+        self._timeline.set_channels(self._session.channels)
+        log.info("Loaded funscript: %s  (%d actions)", path, len(fs.actions))
+
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:
-        self.setWindowTitle(f"Wombat — {path.split('/')[-1]}")
+        self.setWindowTitle(f"Wombat — {Path(path).name}")
         log.info("Loaded: %s", path)
+        # Auto-load a same-basename .funscript if one exists next to the video
+        fs_path = Path(path).with_suffix(".funscript")
+        if fs_path.exists():
+            log.info("Auto-loading funscript: %s", fs_path)
+            self._load_funscript_path(str(fs_path))
 
     def _show_about(self) -> None:
         QMessageBox.about(
@@ -153,5 +194,5 @@ class MainWindow(QMainWindow):
             "About Wombat",
             "<b>Wombat</b><br>"
             "Cross-platform funscript authoring and editing tool.<br><br>"
-            "Version 0.1.0 — Phase 1 (Video Playback)",
+            "Version 0.1.0 — Phase 3 (Read-only Timeline)",
         )

@@ -107,14 +107,16 @@ def test_round_trip_via_channel():
 # ------------------------------------------------------------------ domain isolation
 
 def test_domain_does_not_import_pyside6():
-    import importlib
     import sys
     for mod_name in list(sys.modules.keys()):
         if mod_name.startswith("wombat.domain"):
             del sys.modules[mod_name]
+    # Snapshot what's already in sys.modules (other tests may have loaded PySide6).
+    pyside_before = {k for k in sys.modules if k.startswith("PySide6")}
     import wombat.domain  # noqa: F401
-    pyside_loaded = any(k.startswith("PySide6") for k in sys.modules)
-    assert not pyside_loaded, "wombat.domain must not import PySide6"
+    pyside_after = {k for k in sys.modules if k.startswith("PySide6")}
+    new_pyside = pyside_after - pyside_before
+    assert not new_pyside, f"wombat.domain must not import PySide6, added: {new_pyside}"
 
 
 def test_domain_does_not_import_mpv():
