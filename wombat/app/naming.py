@@ -50,4 +50,6 @@ def discover_siblings(media_path: str) -> list[tuple[str, str]]:
         name = parse_channel_name(f.name, base)
         if name is not None:
             results.append((name, str(f)))
+    # Main channel (empty name → "orig") first, rest alphabetical by channel name
+    results.sort(key=lambda t: ("" if t[0] == "" else t[0]))
     return results

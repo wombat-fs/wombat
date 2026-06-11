@@ -211,6 +211,8 @@ class SnippetPanel(QWidget):
         self._rhythm_controls: dict[str, QWidget] = {}
         self._pos_controls: dict[str, QWidget] = {}
         self._current_entry: SnippetEntry | None = None
+        self._editing_layer_index: int | None = None  # set when editing an existing snippet layer
+        self._syncing: bool = False                   # guard against re-entry during load
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(150)  # ms debounce
@@ -219,6 +221,9 @@ class SnippetPanel(QWidget):
         self._build_ui()
         self._populate_presets()
         self._on_preset_changed(0)
+
+        editor.layer_structure_changed.connect(self._sync_active_layer)
+        editor.selection_changed.connect(self._sync_active_layer)
 
     # ------------------------------------------------------------------ UI construction
 
@@ -313,7 +318,7 @@ class SnippetPanel(QWidget):
 
         root.addWidget(blend_box)
 
-        # Insert button
+        # Insert / Update button (label changes based on edit mode)
         self._insert_btn = QPushButton("Insert as Layer")
         self._insert_btn.setFixedHeight(32)
         self._insert_btn.clicked.connect(self._insert)
@@ -385,6 +390,8 @@ class SnippetPanel(QWidget):
         if entry is None:
             self._clear_params()
             return
+        if not self._syncing and self._editing_layer_index is not None:
+            self._exit_update_mode()
         self._desc_label.setText(entry.description)
         # Collect all param specs for this snippet
         snippet = entry.snippet
@@ -484,14 +491,109 @@ class SnippetPanel(QWidget):
         blend = blend_data if isinstance(blend_data, BlendMode) else BlendMode.ADDITIVE
         entry = self._current_entry
         name = entry.name if entry else "snippet"
-        self._editor.insert_snippet_as_layer(
-            snippet,
-            span,
-            blend=blend,
-            name=name,
-            fade_in=self._fade_in_sb.value(),
-            fade_out=self._fade_out_sb.value(),
-        )
+        if self._editing_layer_index is not None:
+            self._editor.update_snippet_layer(
+                self._editing_layer_index,
+                snippet,
+                span,
+                blend=blend,
+                fade_in=self._fade_in_sb.value(),
+                fade_out=self._fade_out_sb.value(),
+            )
+        else:
+            self._editor.insert_snippet_as_layer(
+                snippet,
+                span,
+                blend=blend,
+                name=name,
+                fade_in=self._fade_in_sb.value(),
+                fade_out=self._fade_out_sb.value(),
+            )
+
+    # ------------------------------------------------------------------ snippet layer editing
+
+    @Slot()
+    def _sync_active_layer(self) -> None:
+        """Called when the active layer changes — enter or exit update mode as needed."""
+        if self._syncing:
+            return
+        if not self._editor.has_active_channel:
+            self._exit_update_mode()
+            return
+        ch = self._editor.active_channel
+        li = self._editor.active_layer_index
+        if not (0 <= li < len(ch.layers)):
+            self._exit_update_mode()
+            return
+        layer = ch.layers[li]
+        if layer.snippet is None:
+            self._exit_update_mode()
+            return
+        if self._editing_layer_index == li:
+            return  # already editing this layer — don't overwrite user's in-progress edits
+        self._load_from_layer(layer, li)
+
+    def _load_from_layer(self, layer, li: int) -> None:
+        """Populate the panel from a snippet layer and enter update mode."""
+        entry_name = layer.snippet_entry_name
+        target_idx = -1
+        for i in range(self._preset_combo.count()):
+            e = self._preset_combo.itemData(i)
+            if e is not None and e.name == entry_name:
+                target_idx = i
+                break
+        if target_idx == -1:
+            return  # unknown preset — can't reconstruct UI
+
+        self._syncing = True
+        try:
+            self._preset_combo.blockSignals(True)
+            self._preset_combo.setCurrentIndex(target_idx)
+            self._preset_combo.blockSignals(False)
+            self._current_entry = self._preset_combo.currentData()
+            # Rebuild controls with entry defaults, then override with stored values
+            self._on_preset_changed(target_idx)
+            self._seed_controls_from_snippet(layer.snippet)
+            # Set span and layer options from the layer
+            if layer.span is not None:
+                start, end = layer.span
+                self._span_start.setValue(start)
+                self._span_dur.setValue(max(0.01, end - start))
+            idx = self._blend_combo.findData(layer.blend)
+            if idx >= 0:
+                self._blend_combo.setCurrentIndex(idx)
+            self._fade_in_sb.setValue(layer.fade_in)
+            self._fade_out_sb.setValue(layer.fade_out)
+        finally:
+            self._syncing = False
+
+        self._editing_layer_index = li
+        self._insert_btn.setText("Update Layer")
+
+    def _exit_update_mode(self) -> None:
+        if self._editing_layer_index is not None:
+            self._editing_layer_index = None
+            self._insert_btn.setText("Insert as Layer")
+
+    def _seed_controls_from_snippet(self, snippet) -> None:
+        """Override param controls with values from a stored snippet object."""
+        if isinstance(snippet, WaveformSnippet):
+            for spec in WaveformSnippet.param_specs():
+                w = self._param_controls.get(spec.key)
+                val = getattr(snippet, spec.key, None)
+                if w is not None and val is not None:
+                    self._set_control_value(w, val)
+        elif isinstance(snippet, BeatSnippet):
+            for spec in type(snippet.rhythm).param_specs():
+                w = self._param_controls.get(spec.key)
+                val = getattr(snippet.rhythm, spec.key, None)
+                if w is not None and val is not None:
+                    self._set_control_value(w, val)
+            for spec in type(snippet.pos).param_specs():
+                w = self._param_controls.get(spec.key)
+                val = getattr(snippet.pos, spec.key, None)
+                if w is not None and val is not None:
+                    self._set_control_value(w, val)
 
     # ------------------------------------------------------------------ helpers
 

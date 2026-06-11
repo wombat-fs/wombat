@@ -148,9 +148,10 @@ class EditorController(QObject):
         self.selection_changed.emit()
 
     def remove_selection(self) -> None:
-        """Delete all selected actions in one undo step."""
+        """Delete all selected actions in one undo step, then select the nearest survivor."""
         if not self.has_active_channel or not self.selection:
             return
+        ref_t = sum(self.selection) / len(self.selection)
         self._undo.snapshot("Delete selection", self._targets(), self.selection)
         layer = self._layer()
         for at in list(self.selection):
@@ -158,7 +159,11 @@ class EditorController(QObject):
                 layer.remove_at(at)
             except ValueError:
                 pass
-        self._set_selection(frozenset())
+        # Select the action nearest to where the deleted ones were.
+        nearest: float | None = None
+        if layer.actions:
+            nearest = min((a.at for a in layer.actions), key=lambda t: abs(t - ref_t))
+        self._set_selection(frozenset({nearest}) if nearest is not None else frozenset())
         self.active_channel._invalidate_cache()
         self._emit_actions()
         self.selection_changed.emit()
@@ -387,7 +392,7 @@ class EditorController(QObject):
         ch = self.active_channel
         self._undo.snapshot_structural("Add layer", ch, self.active_layer_index, self.selection)
         new_layer = Layer(actions=ActionList(), name=name, blend=blend, span=span)
-        insert_at = self.active_layer_index + 1
+        insert_at = self.active_layer_index
         ch.layers.insert(insert_at, new_layer)
         self._active_layer_indices[self._active_idx] = insert_at
         ch._invalidate_cache()
@@ -588,7 +593,7 @@ class EditorController(QObject):
         self._undo.snapshot_structural(
             "Insert snippet", ch, self.active_layer_index, self.selection
         )
-        insert_at = self.active_layer_index + 1
+        insert_at = self.active_layer_index
         new_layer = Layer(
             actions=actions,
             name=name,
@@ -596,9 +601,46 @@ class EditorController(QObject):
             span=span,
             fade_in=fade_in,
             fade_out=fade_out,
+            snippet=snippet,
+            snippet_entry_name=name,
         )
         ch.layers.insert(insert_at, new_layer)
         self._active_layer_indices[self._active_idx] = insert_at
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def update_snippet_layer(
+        self,
+        layer_index: int,
+        snippet: object,
+        span: tuple[float, float],
+        *,
+        blend: "BlendMode",
+        fade_in: float,
+        fade_out: float,
+    ) -> None:
+        """Regenerate a live snippet layer with updated parameters. One undo step."""
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (0 <= layer_index < len(ch.layers)):
+            return
+        base_al = ch.synthesize()
+        fps = (1.0 / self._player.frame_time) if self._player.frame_time > 0 else None
+        actions = snippet.generate(  # type: ignore[union-attr]
+            span,
+            base=base_al,
+            fps=fps,
+            snap_to_frame=self._snap_to_frame,
+        )
+        self._undo.snapshot_structural("Update snippet layer", ch, self.active_layer_index, self.selection)
+        layer = ch.layers[layer_index]
+        layer.actions = actions
+        layer.span = span
+        layer.blend = blend
+        layer.fade_in = fade_in
+        layer.fade_out = fade_out
+        layer.snippet = snippet
         ch._invalidate_cache()
         self._emit_structure()
 

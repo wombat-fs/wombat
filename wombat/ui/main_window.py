@@ -301,7 +301,10 @@ class MainWindow(QMainWindow):
         view_menu = mb.addMenu("&View")
         view_menu.addAction(self._timeline_dock.toggleViewAction())
         view_menu.addAction(self._channels_dock.toggleViewAction())
+        view_menu.addAction(self._snippets_dock.toggleViewAction())
+        view_menu.addAction(self._events_dock.toggleViewAction())
         view_menu.addAction(self._chapters_dock.toggleViewAction())
+        view_menu.addAction(self._recording_dock.toggleViewAction())
 
         sim_action = view_menu.addAction("Device Simulator")
         sim_action.setCheckable(True)
@@ -346,8 +349,8 @@ class MainWindow(QMainWindow):
                 QShortcut(QKeySequence(seq), self, slot)
 
         _sc("play_pause",    self._player.toggle_play)
-        _sc("frame_forward", lambda: self._player.step_frame(forward=True))
-        _sc("frame_back",    lambda: self._player.step_frame(forward=False))
+        _sc("frame_forward", self._frame_forward)
+        _sc("frame_back",    self._frame_back)
         _sc("seek_forward",  lambda: self._player.seek_relative(keybindings._SEEK_STEP))
         _sc("seek_back",     lambda: self._player.seek_relative(-keybindings._SEEK_STEP))
 
@@ -364,6 +367,20 @@ class MainWindow(QMainWindow):
                     QKeySequence(key_seq), self,
                     lambda p=pos: self._insert_action_at_pos(p),
                 )
+
+    def _frame_forward(self) -> None:
+        """Step one frame forward, unless the timeline has focus (uses action navigation there)."""
+        if self.focusWidget() is self._timeline:
+            self._timeline._navigate_to_adjacent_action(forward=True)
+        else:
+            self._player.step_frame(forward=True)
+
+    def _frame_back(self) -> None:
+        """Step one frame back, unless the timeline has focus (uses action navigation there)."""
+        if self.focusWidget() is self._timeline:
+            self._timeline._navigate_to_adjacent_action(forward=False)
+        else:
+            self._player.step_frame(forward=False)
 
     def _insert_action_at_pos(self, pos: int) -> None:
         """Route a keypress through the active scripting mode.

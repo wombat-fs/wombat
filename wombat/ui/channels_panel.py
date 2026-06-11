@@ -63,8 +63,10 @@ class ChannelsPanel(QWidget):
         self._btn_remove_ch.setToolTip("Remove selected channel")
         self._btn_remove_ch.setFixedWidth(28)
         self._btn_ch_up = QPushButton("↑")
+        self._btn_ch_up.setToolTip("Move channel up")
         self._btn_ch_up.setFixedWidth(28)
         self._btn_ch_down = QPushButton("↓")
+        self._btn_ch_down.setToolTip("Move channel down")
         self._btn_ch_down.setFixedWidth(28)
 
         ch_row = QHBoxLayout()
@@ -127,6 +129,8 @@ class ChannelsPanel(QWidget):
         self._tree.currentItemChanged.connect(self._on_current_changed)
         self._tree.itemChanged.connect(self._on_item_changed)
         self._tree.itemDoubleClicked.connect(self._on_double_click)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_context_menu)
 
         project.channels_changed.connect(self._refresh)
         project.active_changed.connect(self._on_active_channel_changed)
@@ -164,17 +168,21 @@ class ChannelsPanel(QWidget):
         self._refreshing = True
         self._tree.blockSignals(True)
 
-        # Preserve expanded state and current selection
+        # Preserve expanded state
         expanded: set[int] = set()
         for i in range(self._tree.topLevelItemCount()):
             item = self._tree.topLevelItem(i)
             if item is not None and item.isExpanded():
                 expanded.add(i)
 
+        # If the current selection is a channel row, restore to channel row (not a layer)
+        prev = self._tree.currentItem()
+        prev_is_channel = prev is not None and prev.data(0, _ROLE_LAYER_IDX) == -1
+
         self._tree.clear()
 
         active_ch = self._project.active_index
-        active_li = self._editor.active_layer_index if self._editor else 0
+        active_li = -1 if prev_is_channel else (self._editor.active_layer_index if self._editor else 0)
 
         for ci, ch in enumerate(self._project.channels):
             blend_text = f"[{'✓' if ch.enabled else '✗'}] {ch.name}"
@@ -228,6 +236,17 @@ class ChannelsPanel(QWidget):
         self._tree.blockSignals(False)
         self._refreshing = False
         self._update_button_states()
+
+    def _select_channel_row(self, ch_idx: int) -> None:
+        """Select the channel row for ch_idx without triggering further refreshes."""
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            if item is not None and item.data(0, _ROLE_CH_IDX) == ch_idx:
+                self._tree.blockSignals(True)
+                self._tree.setCurrentItem(item)
+                self._tree.blockSignals(False)
+                self._update_button_states()
+                return
 
     def _select_active_item(self, ch_idx: int, layer_idx: int) -> None:
         for i in range(self._tree.topLevelItemCount()):
@@ -328,6 +347,40 @@ class ChannelsPanel(QWidget):
             if ok and new_name.strip() and new_name.strip() != old_name:
                 self._editor.rename_layer(li, new_name.strip())
 
+    @Slot(object)
+    def _on_context_menu(self, pos) -> None:
+        item = self._tree.itemAt(pos)
+        if item is None or self._editor is None:
+            return
+        ci = item.data(0, _ROLE_CH_IDX)
+        li = item.data(0, _ROLE_LAYER_IDX)
+        if not (0 <= ci < len(self._project.channels)) or li < 0:
+            return
+        ch = self._project.channels[ci]
+        from wombat.domain.channel import BlendMode
+        layer = ch.layers[li] if 0 <= li < len(ch.layers) else None
+        if layer is None:
+            return
+
+        menu = QMenu(self)
+
+        # Blend mode toggle
+        if layer.blend == BlendMode.OVERRIDE:
+            blend_action = menu.addAction("Switch to Additive")
+        else:
+            blend_action = menu.addAction("Switch to Override")
+
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete Layer")
+        delete_action.setEnabled(len(ch.layers) > 1)
+
+        chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
+        if chosen is blend_action:
+            new_blend = BlendMode.ADDITIVE if layer.blend == BlendMode.OVERRIDE else BlendMode.OVERRIDE
+            self._editor.set_blend(li, new_blend)
+        elif chosen is delete_action and len(ch.layers) > 1:
+            self._editor.remove_layer(li)
+
     # ----------------------------------------------------------------- channel buttons
 
     @Slot()
@@ -377,6 +430,7 @@ class ChannelsPanel(QWidget):
         ci = item.data(0, _ROLE_CH_IDX)
         if ci > 0:
             self._project.move_channel(ci, ci - 1)
+            self._select_channel_row(ci - 1)
 
     @Slot()
     def _move_ch_down(self) -> None:
@@ -386,6 +440,7 @@ class ChannelsPanel(QWidget):
         ci = item.data(0, _ROLE_CH_IDX)
         if 0 <= ci < len(self._project.channels) - 1:
             self._project.move_channel(ci, ci + 1)
+            self._select_channel_row(ci + 1)
 
     # ----------------------------------------------------------------- layer buttons
 

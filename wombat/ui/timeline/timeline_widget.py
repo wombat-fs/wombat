@@ -58,6 +58,7 @@ _SEL_R = 5
 _DRAG_THRESHOLD = 4       # px before press becomes rubber-band
 _HANDLE_TOL = 8           # px hit tolerance for span/fade handles
 _EXPAND_BTN_W = 16        # width of the ▶/▼ expand button zone
+_INACTIVE_LANE_H = 28     # fixed px height for non-active channel lanes
 
 _BG = QColor("#1c1c1c")
 _RULER_BG = QColor("#2a2a2a")
@@ -580,8 +581,34 @@ class TimelineWidget(QWidget):
             if self._editor.has_active_channel:
                 self._scripting_mode.add_point(self._editor, self._player.logical_time, 50)
             event.accept()
+        elif key == Qt.Key.Key_Right and not ctrl and not shift:
+            self._navigate_to_adjacent_action(forward=True)
+            event.accept()
+        elif key == Qt.Key.Key_Left and not ctrl and not shift:
+            self._navigate_to_adjacent_action(forward=False)
+            event.accept()
         else:
             super().keyPressEvent(event)
+
+    def _navigate_to_adjacent_action(self, forward: bool) -> None:
+        if not self._channels or self._active_index >= len(self._channels):
+            return
+        actions = self._channels[self._active_index].synthesize()
+        if not actions:
+            return
+        t = self._player.logical_time
+        # Use one full frame as the proximity threshold so that landing slightly
+        # off a pos (due to frame-rate rounding) still counts as "at" that pos.
+        frame_t = self._player.frame_time or (1.0 / 30.0)
+        if forward:
+            target = next((a.at for a in actions if a.at > t + frame_t), None)
+        else:
+            target = next((a.at for a in reversed(list(actions)) if a.at < t - frame_t), None)
+        if target is not None:
+            self._follow = True
+            self._player.seek_exact(target)
+            if self._editor is not None:
+                self._editor.select(target, additive=False)
 
     def contextMenuEvent(self, event) -> None:
         y = event.pos().y()
@@ -617,35 +644,50 @@ class TimelineWidget(QWidget):
     # ----------------------------------------------------------------- lane geometry
 
     def _compute_lanes(self) -> list[_LaneInfo]:
-        """Build the list of logical lanes with pixel bounds."""
-        n_ch = max(1, len(self._channels))
+        """Build the list of logical lanes with pixel bounds.
+
+        The active channel expands to fill remaining space; inactive channels
+        get a fixed small height so 7+ channels stay usable simultaneously.
+        """
         lane_area_top = _RULER_H
         lane_area_h = max(1, self.height() - _RULER_H)
 
-        # Count total "units" to divide height
-        units: list[int] = []
-        for i in range(len(self._channels)):
-            if i in self._expanded_channels:
-                n_layers = max(1, len(self._channels[i].layers))
-                units.append(1 + n_layers)
-            else:
-                units.append(1)
-        if not units:
-            units = [1]
-        total_units = sum(units)
-        unit_h = max(20, lane_area_h // total_units)
+        if not self._channels:
+            return [_LaneInfo(ch_idx=0, layer_idx=-1, top=lane_area_top, height=lane_area_h)]
+
+        active = self._active_index
+
+        # Compute total height consumed by inactive channels (including their sublanes)
+        inactive_total = 0
+        for ci, ch in enumerate(self._channels):
+            if ci == active:
+                continue
+            n_sublanes = (max(1, len(ch.layers)) if ci in self._expanded_channels else 0)
+            inactive_total += _INACTIVE_LANE_H * (1 + n_sublanes)
+
+        # Active channel gets whatever is left, divided evenly over its units
+        active_units = 1
+        if active in self._expanded_channels and active < len(self._channels):
+            active_units += max(1, len(self._channels[active].layers))
+        active_total = max(_INACTIVE_LANE_H * active_units, lane_area_h - inactive_total)
+        active_unit_h = active_total // active_units
 
         lanes: list[_LaneInfo] = []
         y = lane_area_top
         for ci, ch in enumerate(self._channels):
-            ch_h = unit_h
+            if ci == active:
+                ch_h = active_unit_h
+                sub_h = active_unit_h
+            else:
+                ch_h = _INACTIVE_LANE_H
+                sub_h = _INACTIVE_LANE_H
             lanes.append(_LaneInfo(ch_idx=ci, layer_idx=-1, top=y, height=ch_h))
             y += ch_h
             if ci in self._expanded_channels:
                 n_layers = max(1, len(ch.layers))
                 for li in range(n_layers):
-                    lanes.append(_LaneInfo(ch_idx=ci, layer_idx=li, top=y, height=unit_h))
-                    y += unit_h
+                    lanes.append(_LaneInfo(ch_idx=ci, layer_idx=li, top=y, height=sub_h))
+                    y += sub_h
 
         return lanes
 

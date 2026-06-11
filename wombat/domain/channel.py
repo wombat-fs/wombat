@@ -43,6 +43,9 @@ class Layer:
     fade_out: float = 0.0                      # seconds
     center: int = 50                           # additive reference (default 50)
     fade_curve: FadeCurve = FadeCurve.SMOOTH
+    # If this layer was generated from a snippet, store the source so it can be re-edited.
+    snippet: object | None = None
+    snippet_entry_name: str | None = None
 
     def weight_at(self, t: float, min_fade: float) -> float:
         """Weight envelope [0..1] at time t.

@@ -30,8 +30,28 @@ def apply_dark_theme(app: QApplication) -> None:
     p.setColor(disabled, QPalette.ColorRole.WindowText, _c(110, 110, 110))
 
     app.setPalette(p)
+    app.setStyleSheet(
+        "QMainWindow::separator {"
+        "  background: #555555;"
+        "  width: 5px;"
+        "  height: 5px;"
+        "}"
+        "QMainWindow::separator:hover {"
+        "  background: #888888;"
+        "}"
+    )
 
 
 def apply_light_theme(app: QApplication) -> None:
     app.setStyle("Fusion")
     app.setPalette(QApplication.style().standardPalette())
+    app.setStyleSheet(
+        "QMainWindow::separator {"
+        "  background: #aaaaaa;"
+        "  width: 5px;"
+        "  height: 5px;"
+        "}"
+        "QMainWindow::separator:hover {"
+        "  background: #777777;"
+        "}"
+    )
