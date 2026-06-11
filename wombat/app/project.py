@@ -168,6 +168,13 @@ class Project(QObject):
             self.chapters_changed.emit()
             self.mark_dirty()
 
+    def move_chapter(self, chapter: Chapter, new_at: float) -> None:
+        if chapter in self.chapters:
+            chapter.at = new_at
+            self.chapters.sort()
+            self.chapters_changed.emit()
+            self.mark_dirty()
+
     def chapter_before(self, t: float) -> Chapter | None:
         """Last chapter strictly before t, or None."""
         before = [c for c in self.chapters if c.at < t - 1e-6]

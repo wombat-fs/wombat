@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -47,6 +48,8 @@ class ChaptersPanel(QWidget):
         self._list = QListWidget()
         self._list.setAlternatingRowColors(True)
         self._list.itemDoubleClicked.connect(self._on_double_click)
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self._list)
 
         btn_row = QHBoxLayout()
@@ -129,3 +132,24 @@ class ChaptersPanel(QWidget):
             return
         ch: Chapter = item.data(Qt.ItemDataRole.UserRole)
         self._project.remove_chapter(ch)
+
+    @Slot(object)
+    def _on_context_menu(self, pos) -> None:
+        item = self._list.itemAt(pos)
+        if item is None:
+            return
+        ch: Chapter = item.data(Qt.ItemDataRole.UserRole)
+        menu = QMenu(self)
+        seek_action = menu.addAction(f"Seek to {_fmt(ch.at)}")
+        rename_action = menu.addAction("Rename…")
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete")
+        chosen = menu.exec(self._list.viewport().mapToGlobal(pos))
+        if chosen is seek_action:
+            self._player.seek_exact(ch.at)
+        elif chosen is rename_action:
+            name, ok = QInputDialog.getText(self, "Rename Chapter", "New name:", text=ch.name)
+            if ok:
+                self._project.rename_chapter(ch, name.strip())
+        elif chosen is delete_action:
+            self._project.remove_chapter(ch)

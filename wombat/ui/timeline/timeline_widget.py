@@ -157,6 +157,7 @@ class _DragMode(Enum):
     SPAN_END = auto()     # dragging layer span right edge
     FADE_IN = auto()      # dragging fade-in handle
     FADE_OUT = auto()     # dragging fade-out handle
+    CHAPTER = auto()      # dragging a chapter marker
 
 
 # ------------------------------------------------------------------ widget
@@ -192,6 +193,8 @@ class TimelineWidget(QWidget):
         self._drag_current: QPointF = QPointF()
         self._move_press_t: float = 0.0
         self._move_press_p: float = 0.0
+        # for chapter drags:
+        self._drag_chapter = None          # Chapter | None
         # for span/fade drags:
         self._drag_target_layer: int = 0   # layer_idx being dragged
         self._drag_span_anchor: float = 0.0  # the fixed edge of the span
@@ -326,10 +329,18 @@ class TimelineWidget(QWidget):
         x = float(event.position().x())
         y = float(event.position().y())
 
-        # Ruler → seek
+        # Ruler → drag chapter marker or seek
         if y < _RULER_H:
             t = self._viewport.x_to_time(x)
-            self._player.seek_exact(t)
+            near = self._chapter_near(t)
+            if near is not None:
+                self._drag_mode = _DragMode.CHAPTER
+                self._drag_chapter = near
+                self._drag_start = event.position()
+                self._drag_current = event.position()
+                self._follow = False
+            else:
+                self._player.seek_exact(t)
             event.accept()
             return
 
@@ -490,6 +501,11 @@ class TimelineWidget(QWidget):
                             self._editor.update_fades_live(li, layer.fade_in, new_fo)
             self.update()
 
+        elif self._drag_mode == _DragMode.CHAPTER:
+            if self._drag_chapter is not None and self._project is not None:
+                t = max(0.0, self._viewport.x_to_time(float(self._drag_current.x())))
+                self._project.move_chapter(self._drag_chapter, t)
+
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -540,6 +556,12 @@ class TimelineWidget(QWidget):
         elif mode in (_DragMode.FADE_IN, _DragMode.FADE_OUT):
             if self._editor is not None:
                 self._editor.end_fade_drag()
+
+        elif mode == _DragMode.CHAPTER:
+            if self._drag_chapter is not None and self._project is not None:
+                t = max(0.0, self._viewport.x_to_time(float(self._drag_current.x())))
+                self._project.move_chapter(self._drag_chapter, t)
+            self._drag_chapter = None
 
         event.accept()
 

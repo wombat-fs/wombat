@@ -405,13 +405,29 @@ class ChannelsPanel(QWidget):
 
     @Slot()
     def _import_channel(self) -> None:
+        from pathlib import Path
         path, _ = QFileDialog.getOpenFileName(
             self, "Import Funscript", "",
             "Funscript Files (*.funscript);;All Files (*)",
         )
-        if path:
-            self._project.import_funscript(path)
-            self._project.set_active(len(self._project.channels) - 1)
+        if not path:
+            return
+        # Try to parse the axis name from the filename.
+        # Primary: exact base match  e.g. "clip.volume.funscript" + media "clip.mp4" → "volume"
+        # Fallback: extract suffix after last dot in stem e.g. "MyClip.volume.funscript" → "volume"
+        name: str | None = None
+        stem = Path(path).stem   # e.g. "Intense Hypnos.volume"
+        if self._project.media_path:
+            from wombat.app.naming import parse_channel_name
+            base = Path(self._project.media_path).stem
+            parsed = parse_channel_name(Path(path).name, base)
+            if parsed is not None:
+                name = parsed if parsed else "orig"
+        if name is None and "." in stem:
+            # No media match — use the part after the last dot as the channel name
+            name = stem.rsplit(".", 1)[-1]
+        self._project.import_funscript(path, name=name)
+        self._project.set_active(len(self._project.channels) - 1)
 
     @Slot()
     def _remove_channel(self) -> None:

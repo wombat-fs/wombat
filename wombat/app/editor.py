@@ -15,7 +15,20 @@ from PySide6.QtCore import QObject, Signal
 
 from wombat.app.undo import UndoStack
 from wombat.domain.action import Action, ActionList
+import logging
+
 from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
+
+log = logging.getLogger(__name__)
+
+# Axis names used in funscript-tools YAMLs that differ from Wombat's channel presets.
+# Looked up before falling back to "no such channel" — first match wins.
+_AXIS_ALIASES: dict[str, str] = {
+    "pulse_frequency": "frequency",
+    "pulse_width":     "pulse-width",
+    "pulse_rise":      "pulse-rise",
+    "volume-prostate": "volume",   # secondary device axis; fold into regular volume
+}
 
 if __debug__:
     from typing import TYPE_CHECKING
@@ -691,18 +704,20 @@ class EditorController(QObject):
         if not insertions:
             return
 
-        # Resolve channel names to Channel objects; warn and skip unknowns
+        # Resolve channel names to Channel objects; warn and skip unknowns.
+        # Try exact name first, then consult the alias table for known YAML↔Wombat
+        # naming differences (e.g. pulse_width → pulse-width).
         ch_map = {ch.name: ch for ch in self._project.channels}
         resolved: list[tuple[object, object]] = []  # (Channel, Layer)
+        seen_ch_ids: set[int] = set()               # de-duplicate alias collisions
         for ch_name, layer in insertions:
-            ch = ch_map.get(ch_name)
+            ch = ch_map.get(ch_name) or ch_map.get(_AXIS_ALIASES.get(ch_name, ""))
             if ch is None:
-                import warnings
-                warnings.warn(
-                    f"Event targets channel {ch_name!r} which does not exist — skipped",
-                    stacklevel=2,
-                )
+                log.warning("Event targets channel %r which does not exist — skipped", ch_name)
                 continue
+            if id(ch) in seen_ch_ids:
+                continue  # alias mapped two YAML axes to the same channel; insert once
+            seen_ch_ids.add(id(ch))
             resolved.append((ch, layer))
 
         if not resolved:
