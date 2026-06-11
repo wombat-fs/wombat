@@ -411,17 +411,17 @@ class TestEditorApplyEventLayers:
         assert len(proj.channels[0].layers) == 1
         assert len(proj.channels[1].layers) == 1
 
-    def test_unknown_channel_warns_and_skips(self) -> None:
+    def test_unknown_channel_warns_and_skips(self, caplog) -> None:
+        import logging
         editor, proj, undo = self._setup_editor(["volume"])
         from wombat.domain.action import ActionList
         from wombat.domain.channel import BlendMode, Layer
 
         layer = Layer(actions=ActionList(), name="ev:ghost", blend=BlendMode.ADDITIVE,
                       span=(0.0, 5.0))
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
+        with caplog.at_level(logging.WARNING, logger="wombat.app.editor"):
             editor.apply_event_layers([("does-not-exist", layer)])
-        assert any("does-not-exist" in str(w.message) for w in caught)
+        assert any("does-not-exist" in r.message for r in caplog.records)
         # volume channel unchanged
         assert len(proj.channels[0].layers) == 1
 

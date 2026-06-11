@@ -96,6 +96,16 @@ class EditorController(QObject):
             idx = max(0, min(idx, len(self.active_channel.layers) - 1))
         return idx
 
+    @property
+    def active_layer(self) -> "Layer | None":
+        if not self.has_active_channel:
+            return None
+        ch = self.active_channel
+        idx = self.active_layer_index
+        if 0 <= idx < len(ch.layers):
+            return ch.layers[idx]
+        return None
+
     def set_active_layer_index(self, layer_idx: int) -> None:
         if not self.has_active_channel:
             return
@@ -174,8 +184,8 @@ class EditorController(QObject):
                 pass
         # Select the action nearest to where the deleted ones were.
         nearest: float | None = None
-        if layer.actions:
-            nearest = min((a.at for a in layer.actions), key=lambda t: abs(t - ref_t))
+        if layer:
+            nearest = min((a.at for a in layer), key=lambda t: abs(t - ref_t))
         self._set_selection(frozenset({nearest}) if nearest is not None else frozenset())
         self.active_channel._invalidate_cache()
         self._emit_actions()
@@ -693,6 +703,10 @@ class EditorController(QObject):
         self,
         insertions: list[tuple[str, object]],
         description: str = "Apply event",
+        *,
+        event_name: str | None = None,
+        event_start_ms: float | None = None,
+        event_param_overrides: dict | None = None,
     ) -> None:
         """Insert layers into multiple channels as one undo step.
 
@@ -737,8 +751,101 @@ class EditorController(QObject):
             self.selection,
         )
 
+        # Stamp event metadata onto each layer for live re-editing
+        if event_name is not None:
+            import uuid as _uuid
+            group_id = str(_uuid.uuid4())
+            for _, layer in resolved:
+                layer.event_name = event_name  # type: ignore[union-attr]
+                layer.event_group_id = group_id  # type: ignore[union-attr]
+                layer.event_start_ms = event_start_ms  # type: ignore[union-attr]
+                layer.event_param_overrides = dict(event_param_overrides or {})  # type: ignore[union-attr]
+
         # Insert each layer at the top of its channel's layer stack
         for ch, layer in resolved:
+            ch.layers.append(layer)  # type: ignore[union-attr]
+            ch._invalidate_cache()  # type: ignore[union-attr]
+
+        self._emit_structure()
+
+    def update_event_layers(
+        self,
+        group_id: str,
+        event: object,
+        lib: object,
+        start_ms: float,
+        param_overrides: dict | None = None,
+        event_name: str | None = None,
+    ) -> None:
+        """Replace all layers from an event group with freshly translated content.
+
+        Finds every layer in every channel whose event_group_id matches, removes
+        them, re-translates the event, and re-inserts the new layers — all in one
+        undo step.
+        """
+        from wombat.domain.events.apply import translate_event
+
+        # Collect all channels that contain layers with this group_id
+        affected: list[tuple[object, list[int]]] = []  # (Channel, [layer_indices])
+        for ch in self._project.channels:
+            indices = [
+                i for i, lay in enumerate(ch.layers)
+                if getattr(lay, "event_group_id", None) == group_id
+            ]
+            if indices:
+                affected.append((ch, indices))
+
+        if not affected:
+            return
+
+        # Snapshot all affected channels
+        seen: dict[int, tuple[object, int]] = {}
+        for ch, _ in affected:
+            if id(ch) not in seen:
+                ch_idx = self._channel_index(ch)  # type: ignore[arg-type]
+                ali = self._active_layer_indices.get(ch_idx or 0, 0) if ch_idx is not None else 0
+                seen[id(ch)] = (ch, ali)
+
+        desc = f"Update event: {event_name}" if event_name else "Update event"
+        self._undo.snapshot_multi_structural(
+            desc,
+            [(ch, ali) for ch, ali in seen.values()],  # type: ignore[misc]
+            self.selection,
+        )
+
+        # Remove old event layers (reverse order to preserve indices)
+        for ch, indices in affected:
+            for i in sorted(indices, reverse=True):
+                del ch.layers[i]  # type: ignore[union-attr]
+            ch._invalidate_cache()  # type: ignore[union-attr]
+
+        # Re-translate and insert new layers
+        try:
+            insertions = translate_event(  # type: ignore[call-overload]
+                event, lib, start_ms,
+                param_overrides=param_overrides or None,
+                group=event_name or "",
+            )
+        except Exception as exc:
+            log.warning("update_event_layers: translate_event failed: %s", exc)
+            self._emit_structure()
+            return
+
+        import uuid as _uuid
+        new_group_id = str(_uuid.uuid4())
+        ch_map = {ch.name: ch for ch in self._project.channels}
+        seen_ch_ids: set[int] = set()
+        for ch_name, layer in insertions:
+            ch = ch_map.get(ch_name) or ch_map.get(_AXIS_ALIASES.get(ch_name, ""))
+            if ch is None:
+                continue
+            if id(ch) in seen_ch_ids:
+                continue
+            seen_ch_ids.add(id(ch))
+            layer.event_name = event_name  # type: ignore[union-attr]
+            layer.event_group_id = new_group_id  # type: ignore[union-attr]
+            layer.event_start_ms = start_ms  # type: ignore[union-attr]
+            layer.event_param_overrides = dict(param_overrides or {})  # type: ignore[union-attr]
             ch.layers.append(layer)  # type: ignore[union-attr]
             ch._invalidate_cache()  # type: ignore[union-attr]
 

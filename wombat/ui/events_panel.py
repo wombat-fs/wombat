@@ -49,7 +49,11 @@ class EventsPanel(QWidget):
         self._editor = editor
         self._library: EventLibrary | None = None
         self._yaml_path: str = ""
+        # When editing an existing event layer: holds its group_id; None = fresh apply mode
+        self._editing_group_id: str | None = None
+        self._syncing: bool = False
         self._build_ui()
+        self._connect_editor()
         self._try_load_default()
 
     # ------------------------------------------------------------------ build UI
@@ -113,7 +117,68 @@ class EventsPanel(QWidget):
         self._apply_btn.setEnabled(False)
         slay.addWidget(self._apply_btn)
 
+        self._cancel_update_btn = QPushButton("Cancel update")
+        self._cancel_update_btn.clicked.connect(self._exit_update_mode)
+        self._cancel_update_btn.setVisible(False)
+        slay.addWidget(self._cancel_update_btn)
+
         root.addWidget(settings_box)
+
+    # ------------------------------------------------------------------ editor signals
+
+    def _connect_editor(self) -> None:
+        self._editor.layer_structure_changed.connect(self._sync_active_layer)
+        self._editor.selection_changed.connect(self._sync_active_layer)
+
+    @Slot()
+    def _sync_active_layer(self) -> None:
+        """Detect if the active layer is an event layer and switch to update mode."""
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            layer = self._editor.active_layer
+            if layer is None:
+                self._exit_update_mode()
+                return
+            group_id = getattr(layer, "event_group_id", None)
+            if group_id is None:
+                self._exit_update_mode()
+                return
+            self._load_from_layer(layer, group_id)
+        finally:
+            self._syncing = False
+
+    def _load_from_layer(self, layer: object, group_id: str) -> None:
+        if self._library is None:
+            return
+        event_name = getattr(layer, "event_name", None)
+        if not event_name or event_name not in self._library.events:
+            return
+        start_ms = getattr(layer, "event_start_ms", None) or 0.0
+        param_overrides = getattr(layer, "event_param_overrides", {}) or {}
+
+        # Select the event in the list
+        for i in range(self._event_list.count()):
+            item = self._event_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == event_name:
+                self._event_list.setCurrentItem(item)
+                break
+
+        self._start_spin.setValue(start_ms / 1000.0)
+        dur_override = int(param_overrides.get("duration_ms", 0))
+        self._dur_spin.setValue(dur_override)
+
+        self._editing_group_id = group_id
+        self._apply_btn.setText("Update event")
+        self._cancel_update_btn.setVisible(True)
+
+    def _exit_update_mode(self) -> None:
+        if self._editing_group_id is None:
+            return
+        self._editing_group_id = None
+        self._apply_btn.setText("Apply event")
+        self._cancel_update_btn.setVisible(False)
 
     # ------------------------------------------------------------------ load
 
@@ -159,7 +224,6 @@ class EventsPanel(QWidget):
         ungrouped: list[str] = []
         for name in sorted(lib.events):
             matched = False
-            # Find longest matching prefix (skip empty prefix for now)
             for prefix, gname in sorted(prefix_to_group.items(), key=lambda x: -len(x[0])):
                 if prefix and name.startswith(prefix):
                     grouped.setdefault(gname, []).append(name)
@@ -182,7 +246,6 @@ class EventsPanel(QWidget):
                 item.setData(Qt.ItemDataRole.UserRole, n)
                 self._event_list.addItem(item)
 
-        # Render groups in declared order
         rendered_groups: set[str] = set()
         for g in lib.groups:
             gname = g.name
@@ -206,6 +269,12 @@ class EventsPanel(QWidget):
             self._desc_view.clear()
             return
         self._apply_btn.setEnabled(True)
+        # If user picks a different event, exit update mode
+        if not self._syncing and self._editing_group_id is not None:
+            active_layer = self._editor.active_layer
+            active_event = getattr(active_layer, "event_name", None) if active_layer else None
+            if name != active_event:
+                self._exit_update_mode()
         if self._library and name in self._library.events:
             ev = self._library.events[name]
             lines = [f"<b>{name}</b>", "<br>Default params:"]
@@ -230,12 +299,25 @@ class EventsPanel(QWidget):
         event = self._library.events[name]
         start_ms = self._start_spin.value() * 1000.0
 
-        # Optional duration override
         dur_override = self._dur_spin.value()
         param_overrides = {}
         if dur_override > 0:
             param_overrides["duration_ms"] = dur_override
 
+        if self._editing_group_id is not None:
+            self._editor.update_event_layers(
+                self._editing_group_id,
+                event,
+                self._library,
+                start_ms,
+                param_overrides or None,
+                event_name=name,
+            )
+            # layer_structure_changed will fire and _sync_active_layer will
+            # re-enter update mode with the new group_id automatically.
+            return
+
+        # Fresh apply
         try:
             insertions = translate_event(
                 event, self._library, start_ms,
@@ -250,7 +332,13 @@ class EventsPanel(QWidget):
             log.warning("Event %r produced no insertions (check channel names)", name)
             return
 
-        self._editor.apply_event_layers(insertions, description=f"Apply event: {name}")
+        self._editor.apply_event_layers(
+            insertions,
+            description=f"Apply event: {name}",
+            event_name=name,
+            event_start_ms=start_ms,
+            event_param_overrides=param_overrides or None,
+        )
 
     # ------------------------------------------------------------------ timeline sync
 

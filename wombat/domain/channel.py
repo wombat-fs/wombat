@@ -46,6 +46,11 @@ class Layer:
     # If this layer was generated from a snippet, store the source so it can be re-edited.
     snippet: object | None = None
     snippet_entry_name: str | None = None
+    # If this layer was generated from an event, store the source for live re-editing.
+    event_name: str | None = None
+    event_group_id: str | None = None   # UUID shared by all layers from one apply call
+    event_start_ms: float | None = None
+    event_param_overrides: dict = field(default_factory=dict)
 
     def weight_at(self, t: float, min_fade: float) -> float:
         """Weight envelope [0..1] at time t.
