@@ -26,6 +26,8 @@ from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Slot
 from PySide6.QtGui import (
     QColor,
@@ -78,8 +80,6 @@ _SPAN_BORDER = QColor(255, 255, 255, 70)
 _FADE_HANDLE = QColor(255, 200, 80, 200)
 _GHOST_ALPHA = 0.18
 _CHAPTER_COLOR = QColor(240, 192, 48, 220)   # gold, slightly transparent
-_WAVEFORM_FILL_ACTIVE = QColor(80, 180, 255, 55)
-_WAVEFORM_FILL_DIM    = QColor(80, 180, 255, 22)
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -203,6 +203,15 @@ class TimelineWidget(QWidget):
         # expand/collapse state
         self._expanded_channels: set[int] = set()
 
+        # paint caches
+        self._lanes_cache: list[_LaneInfo] | None = None
+        # (obj_id, act_len, lane_top, lane_height) -> np.ndarray of y pixels
+        self._ys_cache: dict = {}
+        # (obj_id, act_len) -> np.ndarray of at values
+        self._at_cache: dict = {}
+        # (lane_height,) -> (QPixmap, pre_t0, pre_t1, visible_time, width)
+        self._waveform_pixmap_cache: dict = {}
+
         self.setMinimumHeight(60)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -214,6 +223,7 @@ class TimelineWidget(QWidget):
     def set_channels(self, channels: list[Channel]) -> None:
         self._channels = list(channels)
         self._active_index = 0
+        self._invalidate_lanes()
         self.update()
 
     def set_heatmap(self, enabled: bool) -> None:
@@ -223,6 +233,7 @@ class TimelineWidget(QWidget):
     def set_waveform(self, data) -> None:
         """Set waveform data (WaveformData or None) and repaint."""
         self._waveform = data
+        self._waveform_pixmap_cache.clear()
         self.update()
 
     def set_waveform_visible(self, visible: bool) -> None:
@@ -231,15 +242,19 @@ class TimelineWidget(QWidget):
 
     def set_editor(self, editor: EditorController) -> None:
         if self._editor is not None:
+            self._editor.actions_changed.disconnect(self._invalidate_coords)
             self._editor.actions_changed.disconnect(self.update)
             self._editor.selection_changed.disconnect(self.update)
             try:
+                self._editor.layer_structure_changed.disconnect(self._invalidate_lanes)
                 self._editor.layer_structure_changed.disconnect(self.update)
             except RuntimeError:
                 pass
         self._editor = editor
+        editor.actions_changed.connect(self._invalidate_coords)
         editor.actions_changed.connect(self.update)
         editor.selection_changed.connect(self.update)
+        editor.layer_structure_changed.connect(self._invalidate_lanes)
         editor.layer_structure_changed.connect(self.update)
 
     def set_project(self, project: Project) -> None:
@@ -291,11 +306,13 @@ class TimelineWidget(QWidget):
         if self._project is not None:
             self._channels = list(self._project.channels)
             self._active_index = self._project.active_index
+        self._invalidate_lanes()
         self.update()
 
     @Slot(int)
     def _on_active_changed(self, index: int) -> None:
         self._active_index = index
+        self._invalidate_lanes()
         self.update()
 
     # ----------------------------------------------------------------- events
@@ -308,6 +325,7 @@ class TimelineWidget(QWidget):
             lane_top=_RULER_H,
             lane_height=max(1, self.height() - _RULER_H),
         )
+        self._invalidate_lanes()
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
@@ -663,6 +681,54 @@ class TimelineWidget(QWidget):
                 return ch
         return None
 
+    # ----------------------------------------------------------------- cache invalidation
+
+    def _invalidate_lanes(self) -> None:
+        self._lanes_cache = None
+        self._ys_cache.clear()
+        self._at_cache.clear()
+        self._waveform_pixmap_cache.clear()
+
+    def _invalidate_coords(self) -> None:
+        self._ys_cache.clear()
+        self._at_cache.clear()
+
+    def _get_coords(
+        self,
+        actions,
+        draw_lo: int,
+        draw_hi: int,
+        lane_vp: Viewport,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return (xs, ys) pixel arrays for actions[draw_lo:draw_hi].
+
+        ys are cached per (object-id, length, lane geometry) — stable during
+        playback since pos values and lane heights don't change.
+        xs are recomputed each call via vectorized numpy since the viewport
+        offset scrolls every frame in follow mode.
+        """
+        obj_id = id(actions)
+        act_len = len(actions)
+
+        at_key = (obj_id, act_len)
+        if at_key not in self._at_cache:
+            self._at_cache[at_key] = np.array([a.at for a in actions], dtype=np.float64)
+        at_arr = self._at_cache[at_key]
+
+        ys_key = (obj_id, act_len, lane_vp.lane_top, lane_vp.lane_height)
+        if ys_key not in self._ys_cache:
+            pos_arr = np.array([a.pos for a in actions], dtype=np.float64)
+            # Mirrors Viewport.pos_to_y: lane_top + (1 - pos/100) * lane_height
+            self._ys_cache[ys_key] = (
+                lane_vp.lane_top + lane_vp.lane_height
+                - pos_arr * (lane_vp.lane_height / 100.0)
+            )
+        ys_full = self._ys_cache[ys_key]
+
+        at_slice = at_arr[draw_lo:draw_hi]
+        xs = (at_slice - lane_vp.offset) / lane_vp.visible_time * lane_vp.width
+        return xs, ys_full[draw_lo:draw_hi]
+
     # ----------------------------------------------------------------- lane geometry
 
     def _compute_lanes(self) -> list[_LaneInfo]:
@@ -671,6 +737,9 @@ class TimelineWidget(QWidget):
         The active channel expands to fill remaining space; inactive channels
         get a fixed small height so 7+ channels stay usable simultaneously.
         """
+        if self._lanes_cache is not None:
+            return self._lanes_cache
+
         lane_area_top = _RULER_H
         lane_area_h = max(1, self.height() - _RULER_H)
 
@@ -711,6 +780,7 @@ class TimelineWidget(QWidget):
                     lanes.append(_LaneInfo(ch_idx=ci, layer_idx=li, top=y, height=sub_h))
                     y += sub_h
 
+        self._lanes_cache = lanes
         return lanes
 
     def _lane_at(self, x: float, y: float, lanes: list[_LaneInfo]) -> _LaneInfo | None:
@@ -738,6 +808,7 @@ class TimelineWidget(QWidget):
             self._expanded_channels.discard(ch_idx)
         else:
             self._expanded_channels.add(ch_idx)
+        self._invalidate_lanes()
         self.update()
 
     def _lane_at_y(self, y: float) -> int:
@@ -856,8 +927,9 @@ class TimelineWidget(QWidget):
             y = int(lane_vp.pos_to_y(float(guide_pos)))
             painter.drawLine(0, y, self.width(), y)
 
-        # Waveform underlay (behind action graph)
-        self._draw_waveform(painter, lane, is_active)
+        # Waveform underlay — active channel only (avoids N redundant samples_for_range calls)
+        if is_active:
+            self._draw_waveform(painter, lane)
 
         # Expand/collapse toggle
         expand_char = "▼" if lane.ch_idx in self._expanded_channels else "▶"
@@ -876,8 +948,7 @@ class TimelineWidget(QWidget):
             return
 
         line_color = color if is_active else _dim_color(color, _DIM)
-        xs = [lane_vp.time_to_x(actions[i].at) for i in range(draw_lo, draw_hi)]
-        ys = [lane_vp.pos_to_y(float(actions[i].pos)) for i in range(draw_lo, draw_hi)]
+        xs, ys = self._get_coords(actions, draw_lo, draw_hi, lane_vp)
 
         if self._show_heatmap:
             for j in range(len(xs) - 1):
@@ -893,10 +964,12 @@ class TimelineWidget(QWidget):
             for j in range(len(xs) - 1):
                 painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
 
-        for i in range(lo, hi):
+        # dot_start offsets xs/ys (which start at draw_lo) to the lo index
+        dot_start = lo - draw_lo
+        for k, i in enumerate(range(lo, hi)):
             a = actions[i]
-            ax = int(lane_vp.time_to_x(a.at))
-            ay = int(lane_vp.pos_to_y(float(a.pos)))
+            ax = int(xs[dot_start + k])
+            ay = int(ys[dot_start + k])
             if a.at in selection:
                 painter.setPen(Qt.PenStyle.NoPen)
                 painter.setBrush(_SEL_COLOR)
@@ -975,16 +1048,16 @@ class TimelineWidget(QWidget):
                 node_color = _dim_color(color, _GHOST_ALPHA)
 
             if draw_hi > draw_lo:
-                xs = [lane_vp.time_to_x(layer.actions[i].at) for i in range(draw_lo, draw_hi)]
-                ys = [lane_vp.pos_to_y(float(layer.actions[i].pos)) for i in range(draw_lo, draw_hi)]
+                xs, ys = self._get_coords(layer.actions, draw_lo, draw_hi, lane_vp)
                 painter.setPen(QPen(node_color, 1 if not is_active_layer else 2))
                 for j in range(len(xs) - 1):
                     painter.drawLine(int(xs[j]), int(ys[j]), int(xs[j + 1]), int(ys[j + 1]))
 
-                for i in range(lo, hi):
+                dot_start = lo - draw_lo
+                for k, i in enumerate(range(lo, hi)):
                     a = layer.actions[i]
-                    ax = int(lane_vp.time_to_x(a.at))
-                    ay = int(lane_vp.pos_to_y(float(a.pos)))
+                    ax = int(xs[dot_start + k])
+                    ay = int(ys[dot_start + k])
                     if is_active_layer and a.at in selection:
                         painter.setPen(Qt.PenStyle.NoPen)
                         painter.setBrush(_SEL_COLOR)
@@ -1084,40 +1157,82 @@ class TimelineWidget(QWidget):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(rect)
 
-    def _draw_waveform(self, painter: QPainter, lane: _LaneInfo, is_active: bool) -> None:
-        """Draw the audio waveform as a filled background underlay in one lane."""
+    def _render_waveform_pixmap(self, lane_height: int) -> None:
+        """Pre-render a 3× wide waveform pixmap into _waveform_pixmap_cache.
+
+        Covers [t0 - vis_time, t0 + 2*vis_time] so ~vis_time of playback elapses
+        before the next miss.  Uses numpy broadcasting to fill pixels — no QPointF.
+        """
+        from PySide6.QtGui import QImage, QPixmap
+
+        w = self.width()
+        h = lane_height
+        if w <= 0 or h <= 0 or self._waveform is None:
+            self._waveform_pixmap_cache[h] = (QPixmap(), 0.0, 0.0,
+                                               self._viewport.visible_time, w)
+            return
+
+        vis_time = self._viewport.visible_time
+        t0, _ = self._viewport.time_window()
+        pre_t0 = t0 - vis_time
+        pre_t1 = t0 + 2.0 * vis_time
+        pre_w = w * 3
+
+        amplitudes = self._waveform.samples_for_range(pre_t0, pre_t1, pre_w)
+
+        half_h = h / 2.0 * 0.9
+        cy = h / 2.0
+        rows = np.arange(h, dtype=np.float32)[:, np.newaxis]          # (h, 1)
+        amps_px = (amplitudes.astype(np.float32) * half_h)[np.newaxis, :]  # (1, pre_w)
+        mask = np.abs(rows - cy) < amps_px                             # (h, pre_w)
+
+        img_arr = np.zeros((h, pre_w, 4), dtype=np.uint8)
+        # _WAVEFORM_FILL_ACTIVE = QColor(80, 180, 255, 55)
+        img_arr[mask] = [80, 180, 255, 55]
+        img_arr = np.ascontiguousarray(img_arr)
+
+        qimg = QImage(img_arr.data, pre_w, h, pre_w * 4,
+                      QImage.Format.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(qimg)
+        self._waveform_pixmap_cache[h] = (pixmap, pre_t0, pre_t1, vis_time, w)
+
+    def _draw_waveform(self, painter: QPainter, lane: _LaneInfo) -> None:
+        """Draw the audio waveform underlay for the active channel only."""
         if not self._show_waveform or self._waveform is None:
             return
-        import numpy as np
         w = self.width()
-        if w <= 0 or lane.height <= 0:
+        h = lane.height
+        if w <= 0 or h <= 0:
             return
 
         t0, t1 = self._viewport.time_window()
-        amplitudes = self._waveform.samples_for_range(t0, t1, w)
+        vis_time = self._viewport.visible_time
 
-        cy = (lane.top + lane.bottom) / 2.0
-        half_h = lane.height / 2.0 * 0.9   # 90% of half-height at amplitude=1
+        entry = self._waveform_pixmap_cache.get(h)
+        if entry is not None:
+            _, pre_t0, pre_t1, cached_vis, cached_w = entry
+            valid = (cached_vis == vis_time and cached_w == w
+                     and t0 >= pre_t0 and t1 <= pre_t1)
+        else:
+            valid = False
 
-        # Build filled polygon: top edge left→right, then bottom edge right→left.
-        # Using a QPolygonF with 2*w points (one per pixel column each side).
-        from PySide6.QtGui import QPolygonF
-        from PySide6.QtCore import QPointF
+        if not valid:
+            self._render_waveform_pixmap(h)
+            entry = self._waveform_pixmap_cache.get(h)
 
-        xs = np.arange(w, dtype=np.float64)
-        amps = amplitudes.astype(np.float64) * half_h
-        tops = cy - amps
-        bots = cy + amps
+        if entry is None:
+            return
+        pixmap, pre_t0, pre_t1, _, _ = entry
+        if pixmap.isNull():
+            return
 
-        # Interleave into [x0,top0, x1,top1, ..., xN,botN, ..., x0,bot0]
-        top_pts = [QPointF(float(xs[i]), float(tops[i])) for i in range(w)]
-        bot_pts = [QPointF(float(xs[i]), float(bots[i])) for i in range(w - 1, -1, -1)]
-
-        poly = QPolygonF(top_pts + bot_pts)
-        fill = _WAVEFORM_FILL_ACTIVE if is_active else _WAVEFORM_FILL_DIM
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(fill)
-        painter.drawPolygon(poly)
+        pre_dur = pre_t1 - pre_t0
+        pre_w = pixmap.width()
+        src_x = (t0 - pre_t0) / pre_dur * pre_w
+        src_w = (t1 - t0) / pre_dur * pre_w
+        src_rect = QRectF(src_x, 0.0, src_w, float(h))
+        dst_rect = QRectF(0.0, float(lane.top), float(w), float(h))
+        painter.drawPixmap(dst_rect, pixmap, src_rect)
 
     def _draw_chapter_markers(self, painter: QPainter) -> None:
         if self._project is None or not self._project.chapters:
