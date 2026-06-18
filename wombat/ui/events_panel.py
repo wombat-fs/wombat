@@ -17,12 +17,14 @@ from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QTextEdit,
@@ -52,6 +54,7 @@ class EventsPanel(QWidget):
         # When editing an existing event layer: holds its group_id; None = fresh apply mode
         self._editing_group_id: str | None = None
         self._syncing: bool = False
+        self._param_spins: dict[str, QSpinBox | QDoubleSpinBox] = {}
         self._build_ui()
         self._connect_editor()
         self._try_load_default()
@@ -103,14 +106,18 @@ class EventsPanel(QWidget):
         start_row.addWidget(self._start_spin)
         slay.addLayout(start_row)
 
-        dur_row = QHBoxLayout()
-        dur_row.addWidget(QLabel("Duration (ms, 0 = default):"))
-        self._dur_spin = QSpinBox()
-        self._dur_spin.setRange(0, 600_000)
-        self._dur_spin.setSingleStep(1000)
-        self._dur_spin.setValue(0)
-        dur_row.addWidget(self._dur_spin)
-        slay.addLayout(dur_row)
+        # Dynamic param overrides — rebuilt when event selection changes.
+        # Each default_param key gets its own spinbox; 0 / 0.0 means "use event default".
+        self._params_inner = QWidget()
+        self._params_form = QFormLayout(self._params_inner)
+        self._params_form.setContentsMargins(0, 2, 0, 2)
+        self._params_form.setSpacing(3)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._params_inner)
+        scroll.setMaximumHeight(200)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        slay.addWidget(scroll)
 
         self._apply_btn = QPushButton("Apply event")
         self._apply_btn.clicked.connect(self._on_apply)
@@ -166,8 +173,9 @@ class EventsPanel(QWidget):
                 break
 
         self._start_spin.setValue(start_ms / 1000.0)
-        dur_override = int(param_overrides.get("duration_ms", 0))
-        self._dur_spin.setValue(dur_override)
+        for key, spin in self._param_spins.items():
+            if key in param_overrides:
+                spin.setValue(param_overrides[key])
 
         self._editing_group_id = group_id
         self._apply_btn.setText("Update event")
@@ -179,6 +187,29 @@ class EventsPanel(QWidget):
         self._editing_group_id = None
         self._apply_btn.setText("Apply event")
         self._cancel_update_btn.setVisible(False)
+
+    def _refresh_params(self, event) -> None:
+        """Rebuild the param spinboxes for the given EventDefinition (or clear if None)."""
+        while self._params_form.rowCount() > 0:
+            self._params_form.removeRow(0)
+        self._param_spins.clear()
+        if event is None:
+            return
+        for key, default_val in event.default_params.items():
+            if isinstance(default_val, float):
+                spin: QSpinBox | QDoubleSpinBox = QDoubleSpinBox()
+                spin.setRange(0.0, 1000.0)
+                spin.setDecimals(3)
+                spin.setSingleStep(0.05)
+                spin.setSpecialValueText("(default)")
+            else:
+                spin = QSpinBox()
+                spin.setRange(0, 600_000)
+                spin.setSingleStep(500 if "_ms" in key else 1)
+                spin.setSpecialValueText("(default)")
+            spin.setValue(0)
+            self._params_form.addRow(f"{key}  (default: {default_val}):", spin)
+            self._param_spins[key] = spin
 
     # ------------------------------------------------------------------ load
 
@@ -277,10 +308,8 @@ class EventsPanel(QWidget):
                 self._exit_update_mode()
         if self._library and name in self._library.events:
             ev = self._library.events[name]
-            lines = [f"<b>{name}</b>", "<br>Default params:"]
-            for k, v in ev.default_params.items():
-                lines.append(f"&nbsp;&nbsp;{k}: {v}")
-            lines.append(f"<br>Steps: {len(ev.steps)}")
+            self._refresh_params(ev)
+            lines = [f"<b>{name}</b>", f"Steps: {len(ev.steps)}"]
             self._desc_view.setHtml("<br>".join(lines))
 
     # ------------------------------------------------------------------ apply
@@ -299,10 +328,11 @@ class EventsPanel(QWidget):
         event = self._library.events[name]
         start_ms = self._start_spin.value() * 1000.0
 
-        dur_override = self._dur_spin.value()
-        param_overrides = {}
-        if dur_override > 0:
-            param_overrides["duration_ms"] = dur_override
+        param_overrides: dict = {}
+        for key, spin in self._param_spins.items():
+            v = spin.value()
+            if v != 0 and v != 0.0:
+                param_overrides[key] = float(v) if isinstance(spin, QDoubleSpinBox) else int(v)
 
         if self._editing_group_id is not None:
             self._editor.update_event_layers(
