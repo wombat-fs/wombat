@@ -32,16 +32,8 @@ def bootstrap() -> int:
     app.setApplicationName("Wombat")
     app.setOrganizationName("Wombat")
 
-    from wombat.ui.branding import app_icon, make_splash_pixmap
+    from wombat.ui.branding import app_icon, make_splash
     app.setWindowIcon(app_icon())
-
-    # Splash screen up front, before the (slower) window + player construction.
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QSplashScreen
-    splash = QSplashScreen(make_splash_pixmap())
-    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    splash.show()
-    app.processEvents()
 
     # Apply saved theme before creating any windows
     from wombat.settings import AppSettings
@@ -52,18 +44,32 @@ def bootstrap() -> int:
     else:
         apply_light_theme(app)
 
-    from wombat.ui.main_window import MainWindow
+    # Splash screen up front, before the (slower) window + player construction.
+    splash = make_splash()
+    splash.show()
+    splash.raise_()
+    splash.activateWindow()
+    app.processEvents()   # force the splash to paint before we build anything
 
-    win = MainWindow()
-
-    # Keep the splash up for a short minimum, then reveal the window.
+    # How long the splash stays up *after* the window has finished building.
     from PySide6.QtCore import QTimer
-    _SPLASH_MS = 4000
+    _SPLASH_MS = 2000
 
-    def _reveal() -> None:
-        win.show()
-        splash.finish(win)
+    def _build() -> None:
+        # Built inside the running event loop so the splash is mapped and
+        # painted on screen before this blocking construction begins.
+        from wombat.ui.main_window import MainWindow
+        win = MainWindow()
 
-    QTimer.singleShot(_SPLASH_MS, _reveal)
+        def _reveal() -> None:
+            win.show()
+            splash.close()
+            win.raise_()
+            win.activateWindow()
+
+        QTimer.singleShot(_SPLASH_MS, _reveal)
+
+    # Let the event loop paint the splash first, then build the window.
+    QTimer.singleShot(50, _build)
     log.info("Wombat started")
     return app.exec()

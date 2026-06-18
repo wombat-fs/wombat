@@ -10,6 +10,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QLabel
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 
@@ -82,3 +83,30 @@ def make_splash_pixmap() -> QPixmap:
     )
     painter.end()
     return canvas
+
+
+def make_splash() -> QLabel:
+    """A centered, frameless splash window.
+
+    Deliberately a *normal* frameless top-level (QLabel) rather than
+    QSplashScreen: the Qt::SplashScreen window type does not activate the
+    application on macOS, so such a window isn't composited until another
+    window brings the app to the front — which made the splash merely flash.
+    A normal frameless window activates the app and paints right away.
+    """
+    pixmap = make_splash_pixmap()
+    label = QLabel()
+    label.setWindowFlags(
+        Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+    )
+    label.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    label.setPixmap(pixmap)
+
+    dpr = pixmap.devicePixelRatio() or 1.0
+    label.setFixedSize(int(pixmap.width() / dpr), int(pixmap.height() / dpr))
+
+    screen = QGuiApplication.primaryScreen()
+    if screen is not None:
+        center = screen.availableGeometry().center()
+        label.move(center.x() - label.width() // 2, center.y() - label.height() // 2)
+    return label
