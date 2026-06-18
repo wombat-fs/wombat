@@ -89,6 +89,60 @@ def config_path() -> Path:
     return Path(base) / "keybindings.json"
 
 
+def _strip_line_comments(text: str) -> str:
+    """Remove ``//`` line comments, ignoring ``//`` that appear inside strings.
+
+    write_template() emits a commented JSONC file for readability, but json
+    itself is strict — so we strip comments before parsing.
+    """
+    out: list[str] = []
+    in_string = False
+    escaped = False
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if in_string:
+            out.append(c)
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                in_string = False
+            i += 1
+        elif c == '"':
+            in_string = True
+            out.append(c)
+            i += 1
+        elif c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":   # skip to end of line
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _read_user_config() -> dict | None:
+    """Read, comment-strip, and parse the user config file.
+
+    Returns the parsed dict, or None if the file is missing, unreadable,
+    malformed, or not a JSON object.
+    """
+    path = config_path()
+    if not path.exists():
+        return None
+    try:
+        user = json.loads(_strip_line_comments(path.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, OSError) as exc:
+        log.warning("Could not load keybindings.json: %s", exc)
+        return None
+    if not isinstance(user, dict):
+        log.warning("keybindings.json: expected a JSON object, ignoring")
+        return None
+    return user
+
+
 def load() -> dict[str, str]:
     """Return merged bindings: defaults overridden by user file.
 
@@ -96,26 +150,19 @@ def load() -> dict[str, str]:
     dropped so typos don't silently accumulate.
     """
     bindings = dict(DEFAULTS)
-    path = config_path()
-    if not path.exists():
+    user = _read_user_config()
+    if user is None:
         return bindings
-    try:
-        user = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(user, dict):
-            log.warning("keybindings.json: expected a JSON object, ignoring")
-            return bindings
-        for key, val in user.items():
-            if key == "action_keys":
-                continue  # handled by load_action_keys()
-            if key not in DEFAULTS:
-                log.debug("keybindings.json: unknown action %r, ignored", key)
-                continue
-            if not isinstance(val, str):
-                log.warning("keybindings.json: value for %r must be a string", key)
-                continue
-            bindings[key] = val
-    except (json.JSONDecodeError, OSError) as exc:
-        log.warning("Could not load keybindings.json: %s", exc)
+    for key, val in user.items():
+        if key == "action_keys":
+            continue  # handled by load_action_keys()
+        if key not in DEFAULTS:
+            log.debug("keybindings.json: unknown action %r, ignored", key)
+            continue
+        if not isinstance(val, str):
+            log.warning("keybindings.json: value for %r must be a string", key)
+            continue
+        bindings[key] = val
     return bindings
 
 
@@ -127,25 +174,19 @@ def load_action_keys() -> list[str]:
     ``ACTION_KEY_POSITIONS[i]``.
     """
     keys = list(_ACTION_KEY_DEFAULTS)
-    path = config_path()
-    if not path.exists():
+    user = _read_user_config()
+    if user is None or "action_keys" not in user:
         return keys
-    try:
-        user = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(user, dict) and "action_keys" in user:
-            val = user["action_keys"]
-            if isinstance(val, list) and len(val) == len(_ACTION_KEY_DEFAULTS):
-                if all(isinstance(v, str) for v in val):
-                    return list(val)
-                else:
-                    log.warning("keybindings.json: action_keys must be a list of strings")
-            else:
-                log.warning(
-                    "keybindings.json: action_keys must have exactly %d entries",
-                    len(_ACTION_KEY_DEFAULTS),
-                )
-    except (json.JSONDecodeError, OSError) as exc:
-        log.warning("Could not load action_keys from keybindings.json: %s", exc)
+    val = user["action_keys"]
+    if isinstance(val, list) and len(val) == len(_ACTION_KEY_DEFAULTS):
+        if all(isinstance(v, str) for v in val):
+            return list(val)
+        log.warning("keybindings.json: action_keys must be a list of strings")
+    else:
+        log.warning(
+            "keybindings.json: action_keys must have exactly %d entries",
+            len(_ACTION_KEY_DEFAULTS),
+        )
     return keys
 
 
