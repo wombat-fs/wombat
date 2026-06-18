@@ -133,6 +133,14 @@ def _evaluate_fold(enabled: list[Layer], t_arr: np.ndarray, min_fade: float) -> 
         if layer.blend == BlendMode.OVERRIDE:
             # lerp(result, v, w)  →  result + w*(v - result)
             result = result + w * (v - result)
+        elif layer.blend == BlendMode.MULTIPLY:
+            # Scale the accumulated signal around the layer's center by the layer
+            # value as a 0..1 factor, weight-blended. factor=1 → no change;
+            # factor=0 → collapse to center. With center=0 this is plain scaling
+            # toward zero (natural for volume-style channels); with center=50 it
+            # damps oscillations toward the midpoint.
+            factor = v / 100.0
+            result = result + w * (result - layer.center) * (factor - 1.0)
         else:  # ADDITIVE
             result = result + w * (v - layer.center)
     return result

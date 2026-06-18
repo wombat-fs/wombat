@@ -23,6 +23,7 @@ class BlendMode(str, Enum):
     """Blend mode for a layer.  str mixin → value-based equality survives module reloads."""
     OVERRIDE = "override"
     ADDITIVE = "additive"
+    MULTIPLY = "multiply"   # scales the accumulated signal by layer value/100 (e.g. ramps)
 
 
 class FadeCurve(str, Enum):

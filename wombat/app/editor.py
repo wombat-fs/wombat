@@ -208,6 +208,62 @@ class EditorController(QObject):
         self.active_channel._invalidate_cache()
         self._emit_actions()
 
+    def set_selection_pos(self, pos: int) -> bool:
+        """Set every selected action's pos to ``pos`` in one undo step.
+
+        Returns True if anything was edited, False if there was nothing to do
+        (no active channel or empty selection) so the caller can fall back to
+        inserting a new action instead.
+        """
+        if not self.has_active_channel or not self.selection:
+            return False
+        pos = max(0, min(100, pos))
+        layer = self._layer()
+        targets = [a.at for a in layer if a.at in self.selection]
+        if not targets:
+            return False
+        self._undo.snapshot("Set position", self._targets(), self.selection)
+        for at in targets:
+            layer.remove_at(at)
+            layer.add(Action(at, pos))
+        self.active_channel._invalidate_cache()
+        self._emit_actions()
+        self.selection_changed.emit()
+        return True
+
+    def nudge_selection(self, d_seconds: float = 0.0, d_pos: int = 0) -> bool:
+        """Shift every selected action by a small (time, pos) delta in one undo step.
+
+        Unlike a drag-move this bypasses snap-to-frame on purpose — nudging is
+        meant for sub-frame fine-tuning. Returns True if anything moved, False
+        if there was nothing to nudge.
+        """
+        if not self.has_active_channel or not self.selection:
+            return False
+        ch = self.active_channel
+        li = self.active_layer_index
+        layer_al = ch.layers[li].actions
+        sel = self.selection
+        if not any(a.at in sel for a in layer_al):
+            return False
+        self._undo.snapshot("Nudge", [(ch, li)], sel)
+        new_al = ActionList()
+        new_sel: set[float] = set()
+        for a in layer_al:
+            if a.at in sel:
+                new_at = max(0.0, a.at + d_seconds)
+                new_pos = max(0, min(100, a.pos + d_pos))
+                new_al.add(Action(new_at, new_pos))
+                new_sel.add(new_at)
+            else:
+                new_al.add(a)
+        ch.layers[li].actions = new_al
+        ch._invalidate_cache()
+        self._set_selection(frozenset(new_sel))
+        self._emit_actions()
+        self.selection_changed.emit()
+        return True
+
     # ----------------------------------------------------------------- gesture (drag-move)
 
     def begin_move(self) -> None:

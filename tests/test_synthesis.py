@@ -201,6 +201,71 @@ def test_additive_clamps_at_0():
         assert a.pos >= 0, f"Result must clamp at 0, got {a.pos}"
 
 
+# ------------------------------------------------------------------ multiply
+
+def test_multiply_full_scales_base_unchanged():
+    """Multiply layer at 100 (factor 1.0) leaves base untouched."""
+    base_al = _al((0.0, 80), (2.0, 80))
+    mul_al = _al((0.0, 100), (2.0, 100))
+    base = _layer(base_al, name="base")
+    mul = _layer(mul_al, name="mul", blend=BlendMode.MULTIPLY)
+
+    result = synthesize([base, mul])
+    for a in result:
+        assert abs(a.pos - 80) <= 1, f"Expected 80, got {a.pos}"
+
+
+def test_multiply_half_pivots_toward_center():
+    """Multiply at 50 (factor 0.5) pulls the base halfway to center (default 50)."""
+    base_al = _al((0.0, 80), (2.0, 80))
+    mul_al = _al((0.0, 50), (2.0, 50))
+    base = _layer(base_al, name="base")
+    mul = _layer(mul_al, name="mul", blend=BlendMode.MULTIPLY)
+
+    result = synthesize([base, mul])
+    # 50 + 0.5*(80-50) = 65
+    for a in result:
+        assert abs(a.pos - 65) <= 1, f"Expected 65, got {a.pos}"
+
+
+def test_multiply_zero_collapses_to_center():
+    """Multiply at 0 (factor 0.0) collapses the signal onto the layer's center."""
+    base_al = _al((0.0, 90), (2.0, 90))
+    mul_al = _al((0.0, 0), (2.0, 0))
+    base = _layer(base_al, name="base")
+    mul = _layer(mul_al, name="mul", blend=BlendMode.MULTIPLY)
+
+    result = synthesize([base, mul])
+    for a in result:
+        assert abs(a.pos - 50) <= 1, f"Expected 50 (center), got {a.pos}"
+
+
+def test_multiply_center_zero_scales_toward_zero():
+    """With center=0, multiply is plain scaling toward zero (volume-style channels)."""
+    base_al = _al((0.0, 80), (2.0, 80))
+    mul_al = _al((0.0, 50), (2.0, 50))   # factor 0.5
+    base = _layer(base_al, name="base")
+    mul = _layer(mul_al, name="mul", blend=BlendMode.MULTIPLY, center=0)
+
+    result = synthesize([base, mul])
+    # 0 + 0.5*(80-0) = 40
+    for a in result:
+        assert abs(a.pos - 40) <= 1, f"Expected 40, got {a.pos}"
+
+
+def test_multiply_ramp_pivots_around_center():
+    """A multiply layer ramping 100→0 pulls a flat base from itself toward center."""
+    base_al = _al((0.0, 100), (4.0, 100))      # flat at 100
+    mul_al = _al((0.0, 100), (4.0, 0))         # factor 1.0 → 0.0 over 4s
+    base = _layer(base_al, name="base")
+    mul = _layer(mul_al, name="mul", blend=BlendMode.MULTIPLY)  # center=50
+
+    result = synthesize([base, mul])
+    assert abs(_val(result, 0.0) - 100) <= 1   # factor 1.0 → unchanged
+    assert abs(_val(result, 2.0) - 75) <= 2    # factor 0.5 → halfway to center
+    assert abs(_val(result, 4.0) - 50) <= 1    # factor 0.0 → at center
+
+
 # ------------------------------------------------------------------ order matters
 
 def test_order_matters_two_overlapping_override():

@@ -300,6 +300,7 @@ class SnippetPanel(QWidget):
         self._blend_combo = QComboBox()
         self._blend_combo.addItem("Additive", BlendMode.ADDITIVE)
         self._blend_combo.addItem("Override", BlendMode.OVERRIDE)
+        self._blend_combo.addItem("Multiply", BlendMode.MULTIPLY)
         blend_layout.addRow("Blend:", self._blend_combo)
 
         self._fade_in_sb = QDoubleSpinBox()

@@ -627,6 +627,15 @@ class TimelineWidget(QWidget):
         elif key == Qt.Key.Key_Left and not ctrl and not shift:
             self._navigate_to_adjacent_action(forward=False)
             event.accept()
+        elif shift and key in (
+            Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down
+        ) and not ctrl:
+            # Nudge the selection: half a frame in time (left/right), one pos unit (up/down).
+            half_frame = (self._player.frame_time or (1.0 / 30.0)) / 2.0
+            d_seconds = {Qt.Key.Key_Left: -half_frame, Qt.Key.Key_Right: half_frame}.get(key, 0.0)
+            d_pos = {Qt.Key.Key_Up: 1, Qt.Key.Key_Down: -1}.get(key, 0)
+            self._editor.nudge_selection(d_seconds, d_pos)
+            event.accept()
         else:
             super().keyPressEvent(event)
 
@@ -1070,7 +1079,10 @@ class TimelineWidget(QWidget):
 
         # Layer label
         from wombat.domain.channel import BlendMode
-        blend_badge = "ADD" if layer.blend == BlendMode.ADDITIVE else "OVR"
+        blend_badge = {
+            BlendMode.ADDITIVE: "ADD",
+            BlendMode.MULTIPLY: "MUL",
+        }.get(layer.blend, "OVR")
         enabled_mark = "" if layer.enabled else "[off] "
         label = f"  {enabled_mark}{blend_badge} {layer.name}"
         label_color = color if is_active_layer else _dim_color(_LABEL_FG, 0.7)

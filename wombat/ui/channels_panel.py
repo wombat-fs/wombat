@@ -35,6 +35,13 @@ _INACTIVE_COLOR = QColor("#aaaaaa")
 _ACTIVE_LAYER_COLOR = QColor("#00e8a8")
 _BLEND_OVERRIDE = "OVR"
 _BLEND_ADDITIVE = "ADD"
+_BLEND_MULTIPLY = "MUL"
+# Keyed by BlendMode's string value (str-enum hashes equal to its value).
+_BLEND_BADGES = {
+    "override": _BLEND_OVERRIDE,
+    "additive": _BLEND_ADDITIVE,
+    "multiply": _BLEND_MULTIPLY,
+}
 
 # TreeWidgetItem user roles
 _ROLE_CH_IDX = Qt.ItemDataRole.UserRole
@@ -203,12 +210,7 @@ class ChannelsPanel(QWidget):
             self._tree.addTopLevelItem(ch_item)
 
             for li, layer in enumerate(ch.layers):
-                from wombat.domain.channel import BlendMode
-                blend_badge = (
-                    _BLEND_ADDITIVE
-                    if layer.blend == BlendMode.ADDITIVE
-                    else _BLEND_OVERRIDE
-                )
+                blend_badge = _BLEND_BADGES.get(layer.blend, _BLEND_OVERRIDE)
                 label = f"  {blend_badge}  {layer.name}"
                 l_item = QTreeWidgetItem([label])
                 l_item.setFlags(
@@ -364,20 +366,28 @@ class ChannelsPanel(QWidget):
 
         menu = QMenu(self)
 
-        # Blend mode toggle
-        if layer.blend == BlendMode.OVERRIDE:
-            blend_action = menu.addAction("Switch to Additive")
-        else:
-            blend_action = menu.addAction("Switch to Override")
+        # Blend mode picker — checkable, current mode marked.
+        blend_menu = menu.addMenu("Blend mode")
+        blend_actions: dict[object, BlendMode] = {}
+        for mode, label in (
+            (BlendMode.OVERRIDE, "Override"),
+            (BlendMode.ADDITIVE, "Additive"),
+            (BlendMode.MULTIPLY, "Multiply"),
+        ):
+            act = blend_menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(layer.blend == mode)
+            blend_actions[act] = mode
 
         menu.addSeparator()
         delete_action = menu.addAction("Delete Layer")
         delete_action.setEnabled(len(ch.layers) > 1)
 
         chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
-        if chosen is blend_action:
-            new_blend = BlendMode.ADDITIVE if layer.blend == BlendMode.OVERRIDE else BlendMode.OVERRIDE
-            self._editor.set_blend(li, new_blend)
+        if chosen in blend_actions:
+            new_blend = blend_actions[chosen]
+            if new_blend != layer.blend:
+                self._editor.set_blend(li, new_blend)
         elif chosen is delete_action and len(ch.layers) > 1:
             self._editor.remove_layer(li)
 

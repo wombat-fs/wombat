@@ -385,11 +385,14 @@ class MainWindow(QMainWindow):
     def _insert_action_at_pos(self, pos: int) -> None:
         """Route a keypress through the active scripting mode.
 
-        Ignored when a text-editing widget has keyboard focus.
+        If actions are currently selected, set their pos instead of inserting a
+        new action. Ignored when a text-editing widget has keyboard focus.
         """
         from PySide6.QtWidgets import QAbstractSpinBox, QLineEdit, QTextEdit
         focused = self.focusWidget()
         if isinstance(focused, (QLineEdit, QTextEdit, QAbstractSpinBox)):
+            return
+        if self._editor.set_selection_pos(pos):
             return
         self._mode.add_point(self._editor, self._player.logical_time, pos)
 
