@@ -1199,8 +1199,10 @@ class TimelineWidget(QWidget):
         mask = np.abs(rows - cy) < amps_px                             # (h, pre_w)
 
         img_arr = np.zeros((h, pre_w, 4), dtype=np.uint8)
-        # _WAVEFORM_FILL_ACTIVE = QColor(80, 180, 255, 55)
-        img_arr[mask] = [80, 180, 255, 55]
+        # Light green: contrasts with every saturated channel line color
+        # (blue/orange/teal/yellow/magenta) instead of blending into the blue line graph.
+        # _WAVEFORM_FILL_ACTIVE = QColor(120, 220, 125, 75)
+        img_arr[mask] = [120, 220, 125, 75]
         img_arr = np.ascontiguousarray(img_arr)
 
         qimg = QImage(img_arr.data, pre_w, h, pre_w * 4,
