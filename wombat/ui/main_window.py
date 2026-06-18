@@ -31,6 +31,7 @@ from wombat.ui.scripting import AlternatingMode, DefaultMode, RecordingMode, Scr
 from wombat.ui.scripting.recording_panel import RecordingPanel
 from wombat.ui.snippet_panel import SnippetPanel
 from wombat.ui.timeline.timeline_widget import TimelineWidget
+from wombat.ui.timeline.zoom_control import ZoomControl
 from wombat.ui.transport import TransportBar
 
 log = logging.getLogger(__name__)
@@ -110,10 +111,18 @@ class MainWindow(QMainWindow):
         self._timeline = TimelineWidget(self._player)
         self._timeline.set_editor(self._editor)
         self._timeline.set_project(self._project)
+        self._zoom_control = ZoomControl(self._timeline)
+
+        timeline_container = QWidget()
+        timeline_layout = QVBoxLayout(timeline_container)
+        timeline_layout.setContentsMargins(0, 0, 0, 0)
+        timeline_layout.setSpacing(0)
+        timeline_layout.addWidget(self._timeline, stretch=1)
+        timeline_layout.addWidget(self._zoom_control)
 
         timeline_dock = QDockWidget("Timeline", self)
         timeline_dock.setObjectName("timelineDock")
-        timeline_dock.setWidget(self._timeline)
+        timeline_dock.setWidget(timeline_container)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, timeline_dock)
         self._timeline_dock = timeline_dock
 

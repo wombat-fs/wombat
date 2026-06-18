@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Slot
+from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
     QKeyEvent,
@@ -163,6 +163,13 @@ class _DragMode(Enum):
 # ------------------------------------------------------------------ widget
 
 class TimelineWidget(QWidget):
+    # Visible span (seconds) that the UI calls "1× zoom". Zoom level is defined
+    # as BASE_VISIBLE / visible_time, so larger zoom shows a shorter span.
+    BASE_VISIBLE: float = 30.0
+
+    # Emitted whenever the horizontal zoom level changes (wheel, control, load).
+    zoom_changed = Signal(float)
+
     def __init__(self, player: VideoPlayer, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._player = player
@@ -171,7 +178,7 @@ class TimelineWidget(QWidget):
         self._project: Project | None = None
         self._viewport = Viewport(
             offset=0.0,
-            visible_time=30.0,
+            visible_time=self.BASE_VISIBLE,
             width=max(1, self.width()),
             lane_top=_RULER_H,
             lane_height=max(1, self.height() - _RULER_H),
@@ -281,6 +288,45 @@ class TimelineWidget(QWidget):
 
     def restore_view_state(self, offset: float, visible_time: float) -> None:
         self._viewport = replace(self._viewport, offset=offset, visible_time=visible_time)
+        self.zoom_changed.emit(self.zoom_level())
+        self.update()
+
+    # ----------------------------------------------------------------- zoom
+
+    def zoom_level(self) -> float:
+        """Current horizontal scale; 1.0 == default span."""
+        if self._viewport.visible_time <= 0:
+            return 1.0
+        return self.BASE_VISIBLE / self._viewport.visible_time
+
+    def min_zoom_level(self) -> float:
+        return self.BASE_VISIBLE / Viewport.MAX_VISIBLE
+
+    def max_zoom_level(self) -> float:
+        return self.BASE_VISIBLE / Viewport.MIN_VISIBLE
+
+    def set_zoom_level(self, level: float) -> None:
+        """Set the absolute zoom level, anchored on the playhead (or center)."""
+        level = max(self.min_zoom_level(), min(self.max_zoom_level(), level))
+        self._apply_visible_time(self.BASE_VISIBLE / level)
+
+    def zoom_by(self, level_factor: float) -> None:
+        """Multiply the current zoom level by level_factor (>1 zooms in)."""
+        self._apply_visible_time(self._viewport.visible_time / level_factor)
+
+    def _zoom_anchor_x(self) -> float:
+        """Keep the playhead fixed while zooming if it is on screen, else center."""
+        x = self._viewport.time_to_x(self._playhead_time)
+        if 0.0 <= x <= self._viewport.width:
+            return x
+        return self._viewport.width / 2.0
+
+    def _apply_visible_time(self, new_visible: float, anchor_x: float | None = None) -> None:
+        if anchor_x is None:
+            anchor_x = self._zoom_anchor_x()
+        factor = new_visible / self._viewport.visible_time if self._viewport.visible_time else 1.0
+        self._viewport = self._viewport.zoom(factor, anchor_x)
+        self.zoom_changed.emit(self.zoom_level())
         self.update()
 
     def sizeHint(self) -> QSize:
@@ -331,11 +377,14 @@ class TimelineWidget(QWidget):
         delta = event.angleDelta().y()
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             factor = 0.85 if delta > 0 else 1.0 / 0.85
-            self._viewport = self._viewport.zoom(factor, float(event.position().x()))
-        else:
-            dt = -(delta / 120.0) * self._viewport.visible_time * 0.2
-            self._viewport = self._viewport.pan(dt)
-            self._follow = False
+            self._apply_visible_time(
+                self._viewport.visible_time * factor, float(event.position().x())
+            )
+            event.accept()
+            return
+        dt = -(delta / 120.0) * self._viewport.visible_time * 0.2
+        self._viewport = self._viewport.pan(dt)
+        self._follow = False
         self.update()
         event.accept()
 
