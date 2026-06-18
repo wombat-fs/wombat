@@ -469,10 +469,13 @@ class SnippetPanel(QWidget):
         if not self._editor.has_active_channel:
             return
         sel = self._editor.selection
-        if len(sel) < 2:
-            # fall back to playhead ± 5 s
-            t = self._player.position
-            self._span_start.setValue(max(0.0, t))
+        if len(sel) == 1:
+            # Single action: anchor start on it, keep the current duration.
+            self._span_start.setValue(max(0.0, next(iter(sel))))
+            return
+        if len(sel) == 0:
+            # Nothing selected: fall back to playhead with a default duration.
+            self._span_start.setValue(max(0.0, self._player.position))
             self._span_dur.setValue(5.0)
             return
         t0 = min(sel)
