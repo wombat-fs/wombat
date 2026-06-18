@@ -32,6 +32,17 @@ def bootstrap() -> int:
     app.setApplicationName("Wombat")
     app.setOrganizationName("Wombat")
 
+    from wombat.ui.branding import app_icon, make_splash_pixmap
+    app.setWindowIcon(app_icon())
+
+    # Splash screen up front, before the (slower) window + player construction.
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QSplashScreen
+    splash = QSplashScreen(make_splash_pixmap())
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.show()
+    app.processEvents()
+
     # Apply saved theme before creating any windows
     from wombat.settings import AppSettings
     from wombat.ui.theme import apply_dark_theme, apply_light_theme
@@ -44,6 +55,15 @@ def bootstrap() -> int:
     from wombat.ui.main_window import MainWindow
 
     win = MainWindow()
-    win.show()
+
+    # Keep the splash up for a short minimum, then reveal the window.
+    from PySide6.QtCore import QTimer
+    _SPLASH_MS = 2000
+
+    def _reveal() -> None:
+        win.show()
+        splash.finish(win)
+
+    QTimer.singleShot(_SPLASH_MS, _reveal)
     log.info("Wombat started")
     return app.exec()
