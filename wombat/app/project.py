@@ -292,7 +292,7 @@ class Project(QObject):
 # ------------------------------------------------------------------ helpers
 
 def _layer_to_dict(layer: Layer) -> dict:
-    return {
+    d: dict = {
         "name": layer.name,
         "enabled": layer.enabled,
         "blend": layer.blend.value,
@@ -303,6 +303,12 @@ def _layer_to_dict(layer: Layer) -> dict:
         "fade_curve": layer.fade_curve.value,
         "actions": [{"at": a.at, "pos": a.pos} for a in layer.actions],
     }
+    if layer.event_name is not None:
+        d["event_name"] = layer.event_name
+        d["event_group_id"] = layer.event_group_id
+        d["event_start_ms"] = layer.event_start_ms
+        d["event_param_overrides"] = layer.event_param_overrides
+    return d
 
 
 def _layer_from_dict(d: dict) -> Layer:
@@ -313,7 +319,7 @@ def _layer_from_dict(d: dict) -> Layer:
     span: tuple[float, float] | None = (
         (float(span_raw[0]), float(span_raw[1])) if span_raw else None
     )
-    return Layer(
+    layer = Layer(
         actions=actions,
         name=str(d.get("name", "base")),
         enabled=bool(d.get("enabled", True)),
@@ -324,6 +330,12 @@ def _layer_from_dict(d: dict) -> Layer:
         center=int(d.get("center", 50)),
         fade_curve=FadeCurve(d.get("fade_curve", "smooth")),
     )
+    if "event_name" in d:
+        layer.event_name = d["event_name"]
+        layer.event_group_id = d.get("event_group_id")
+        layer.event_start_ms = d.get("event_start_ms")
+        layer.event_param_overrides = dict(d.get("event_param_overrides") or {})
+    return layer
 
 
 def _channel_to_dict(ch: Channel) -> dict:
