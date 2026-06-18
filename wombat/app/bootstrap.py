@@ -58,7 +58,7 @@ def bootstrap() -> int:
 
     # Keep the splash up for a short minimum, then reveal the window.
     from PySide6.QtCore import QTimer
-    _SPLASH_MS = 2000
+    _SPLASH_MS = 4000
 
     def _reveal() -> None:
         win.show()
