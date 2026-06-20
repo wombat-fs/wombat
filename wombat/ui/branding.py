@@ -72,10 +72,20 @@ def make_splash_pixmap() -> QPixmap:
         painter.drawPixmap(int(x), int(y), scaled)
 
     # Tagline
-    font = painter.font()
-    font.setPointSizeF(font.pointSizeF() * 1.05)
-    painter.setFont(font)
     painter.setPen(_TAGLINE_FG)
+
+    font = painter.font()
+    font.setPointSizeF(font.pointSizeF() * 2.4)
+    painter.setFont(font)
+    painter.drawText(
+        QRectF(0, height - 140, width, 48),
+        Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+        "Funscript Studio",
+    )
+
+    font = painter.font()
+    font.setPointSizeF(font.pointSizeF() * 0.5)
+    painter.setFont(font)
     painter.drawText(
         QRectF(0, height - 56, width, 28),
         Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
