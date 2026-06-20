@@ -315,6 +315,16 @@ class MainWindow(QMainWindow):
         reset_alt_action.setToolTip("Reset alternating state so next keypress inserts top position")
         reset_alt_action.triggered.connect(self._alternating_mode.reset)
 
+        beats_menu = mb.addMenu("&Beats")
+        detect_action = beats_menu.addAction("Detect Beats")
+        detect_action.setToolTip("Run beat detection on the current video's audio")
+        detect_action.triggered.connect(self._detect_beats)
+        beats_menu.addSeparator()
+        import_beats_action = beats_menu.addAction("Import .beats…")
+        import_beats_action.triggered.connect(self._import_beats)
+        self._export_beats_action = beats_menu.addAction("Export .beats…")
+        self._export_beats_action.triggered.connect(self._export_beats)
+
         view_menu = mb.addMenu("&View")
         view_menu.addAction(self._timeline_dock.toggleViewAction())
         view_menu.addAction(self._channels_dock.toggleViewAction())
@@ -765,6 +775,69 @@ class MainWindow(QMainWindow):
         self._timeline.set_beats(grid)
         self._editor.set_beats(grid)
         self._snippet_panel.set_beats(grid)
+
+    @Slot()
+    def _detect_beats(self) -> None:
+        """Manually (re-)run beat detection on the current video."""
+        if self._project.media_path is None:
+            QMessageBox.warning(self, "Detect Beats", "Open a video first.")
+            return
+        from wombat.audio.beats import resolve_beat_tool
+        binary, model = resolve_beat_tool()
+        if not (binary and model):
+            QMessageBox.warning(
+                self, "Detect Beats",
+                "Beat detector is not configured.\n\n"
+                "Set the binary path in Preferences → Beat Detection.",
+            )
+            return
+        self._beat_loader.load(self._project.media_path)
+
+    @Slot()
+    def _import_beats(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Beats", "", "Beats files (*.beats);;All Files (*)"
+        )
+        if not path:
+            return
+        from wombat.audio.beats import parse_beats
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+        except OSError as exc:
+            QMessageBox.critical(self, "Import Beats", str(exc))
+            return
+        grid = parse_beats(text)
+        self._set_beats(grid)
+        self.statusBar().showMessage(f"Imported {len(grid)} beats.", 5000)
+
+    @Slot()
+    def _export_beats(self) -> None:
+        if self._beats is None or len(self._beats) == 0:
+            QMessageBox.warning(
+                self, "Export Beats",
+                "No beats to export.\nDetect or import beats first.",
+            )
+            return
+        default = ""
+        if self._project.media_path:
+            default = str(Path(self._project.media_path).with_suffix(".beats"))
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Beats", default, "Beats files (*.beats);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".beats"):
+            path += ".beats"
+        from wombat.audio.beats import serialize_beats
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(serialize_beats(self._beats))
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Beats", str(exc))
+            return
+        self.statusBar().showMessage(f"Exported {len(self._beats)} beats.", 5000)
+        log.info("Exported beats: %s", path)
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:

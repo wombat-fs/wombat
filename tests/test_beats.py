@@ -145,6 +145,16 @@ def test_downbeat_constant():
     assert DOWNBEAT_COUNT == 1
 
 
+def test_beats_file_disk_round_trip(tmp_path):
+    # mirrors what the Import/Export .beats menu actions do
+    g = _grid((0.340, 4), (0.681, 1), (1.023, 2))
+    path = tmp_path / "clip.beats"
+    path.write_text(serialize_beats(g), encoding="utf-8")
+    g2 = parse_beats(path.read_text(encoding="utf-8"))
+    assert list(g2.times) == pytest.approx(list(g.times))
+    assert list(g2.counts) == list(g.counts)
+
+
 # ---------------------------------------------------------------- tool resolution
 
 def test_resolve_explicit_args_win(monkeypatch):
