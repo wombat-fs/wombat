@@ -552,7 +552,7 @@ class MainWindow(QMainWindow):
         self._backup.stop()
         self._backup.clear()
         self._waveform_loader.cancel()
-        self._beat_loader.cancel()
+        self._beat_loader.wait_all()
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
         super().closeEvent(event)
