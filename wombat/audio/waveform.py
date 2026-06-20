@@ -6,15 +6,13 @@ Results are cached as numpy binary files keyed by video path + mtime.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
-import shutil
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QStandardPaths
+
+from wombat.audio._cache import cache_key, cache_subdir, ffmpeg_path
 
 log = logging.getLogger(__name__)
 
@@ -74,21 +72,11 @@ class WaveformData:
 # Cache helpers
 
 def _cache_dir() -> Path:
-    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.CacheLocation)
-    return Path(base) / "waveforms"
-
-
-def _cache_key(video_path: str) -> str:
-    try:
-        mtime = int(Path(video_path).stat().st_mtime * 1000)
-    except OSError:
-        mtime = 0
-    digest = hashlib.sha256(f"{video_path}:{mtime}".encode()).hexdigest()[:20]
-    return digest
+    return cache_subdir("waveforms")
 
 
 def _load_cache(video_path: str) -> WaveformData | None:
-    path = _cache_dir() / f"{_cache_key(video_path)}.npy"
+    path = _cache_dir() / f"{cache_key(video_path)}.npy"
     if not path.exists():
         return None
     try:
@@ -103,7 +91,7 @@ def _load_cache(video_path: str) -> WaveformData | None:
 
 
 def _save_cache(video_path: str, wf: WaveformData) -> None:
-    path = _cache_dir() / f"{_cache_key(video_path)}.npy"
+    path = _cache_dir() / f"{cache_key(video_path)}.npy"
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         arr = np.empty(1 + len(wf.peaks), dtype=np.float32)
@@ -117,10 +105,6 @@ def _save_cache(video_path: str, wf: WaveformData) -> None:
 # ---------------------------------------------------------------------------
 # Extraction
 
-def _ffmpeg_path() -> str | None:
-    return shutil.which("ffmpeg")
-
-
 def extract_waveform(video_path: str) -> WaveformData | None:
     """Decode audio and compute peak amplitudes.  Blocking; call from a thread.
 
@@ -131,7 +115,7 @@ def extract_waveform(video_path: str) -> WaveformData | None:
         log.debug("Waveform loaded from cache for: %s", video_path)
         return cached
 
-    ffmpeg = _ffmpeg_path()
+    ffmpeg = ffmpeg_path()
     if ffmpeg is None:
         log.warning("ffmpeg not found on PATH — audio waveform unavailable")
         return None

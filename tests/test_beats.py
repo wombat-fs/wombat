@@ -1,12 +1,18 @@
-"""Tests for the BeatGrid data model and the .beats file format."""
+"""Tests for the BeatGrid data model, the .beats format, and detection."""
+import os
+import stat
+
 import numpy as np
 import pytest
 
+from wombat.audio import beats as beats_mod
 from wombat.audio.beats import (
     DOWNBEAT_COUNT,
     UNKNOWN_COUNT,
     BeatGrid,
+    detect_beats,
     parse_beats,
+    resolve_beat_tool,
     serialize_beats,
 )
 
@@ -137,3 +143,138 @@ def test_round_trip_unknown_counts():
 
 def test_downbeat_constant():
     assert DOWNBEAT_COUNT == 1
+
+
+# ---------------------------------------------------------------- tool resolution
+
+def test_resolve_explicit_args_win(monkeypatch):
+    # explicit args must short-circuit settings/env/which entirely
+    monkeypatch.setattr(beats_mod, "_get_settings", lambda: None)
+    monkeypatch.setenv("WOMBAT_BEAT_THIS_BIN", "/env/bin")
+    monkeypatch.setenv("WOMBAT_BEAT_THIS_MODEL", "/env/model")
+    b, m = resolve_beat_tool("/explicit/bin", "/explicit/model")
+    assert (b, m) == ("/explicit/bin", "/explicit/model")
+
+
+def test_resolve_falls_back_to_env(monkeypatch):
+    monkeypatch.setattr(beats_mod, "_get_settings", lambda: None)
+    monkeypatch.setenv("WOMBAT_BEAT_THIS_BIN", "/env/bin")
+    monkeypatch.setenv("WOMBAT_BEAT_THIS_MODEL", "/env/model")
+    assert resolve_beat_tool() == ("/env/bin", "/env/model")
+
+
+def test_resolve_missing_returns_none(monkeypatch):
+    monkeypatch.setattr(beats_mod, "_get_settings", lambda: None)
+    monkeypatch.delenv("WOMBAT_BEAT_THIS_BIN", raising=False)
+    monkeypatch.delenv("WOMBAT_BEAT_THIS_MODEL", raising=False)
+    monkeypatch.setattr(beats_mod.shutil, "which", lambda _: None)
+    assert resolve_beat_tool() == (None, None)
+
+
+# -------------------------------------------------------------------- detection
+
+def _write_script(path, body):
+    path.write_text("#!/bin/sh\n" + body)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+@pytest.fixture
+def fake_tools(tmp_path, monkeypatch):
+    """Fake ffmpeg + beat binary; isolated cache dir; counts binary invocations."""
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(beats_mod, "_cache_dir", lambda: cache_dir)
+
+    # fake ffmpeg: writes a non-empty "wav" to whichever arg ends in .wav
+    ffmpeg = tmp_path / "ffmpeg"
+    _write_script(
+        ffmpeg,
+        'for a in "$@"; do case "$a" in *.wav) printf "RIFFfake" > "$a";; esac; done\n',
+    )
+    monkeypatch.setattr(beats_mod, "ffmpeg_path", lambda: str(ffmpeg))
+
+    # fake beat binary: writes fixed beats to the --output-beats target and
+    # bumps a call counter so cache hits are observable.
+    counter = tmp_path / "calls"
+    binary = tmp_path / "beat_this_cpp"
+    _write_script(
+        binary,
+        f'echo x >> "{counter}"\n'
+        'prev=""; out=""\n'
+        'for a in "$@"; do [ "$prev" = "--output-beats" ] && out="$a"; prev="$a"; done\n'
+        'printf "0.500\\t1\\n1.000\\t2\\n1.500\\t3\\n" > "$out"\n',
+    )
+    model = tmp_path / "model.onnx"
+    model.write_text("fake-model")
+
+    video = tmp_path / "clip.mp4"
+    video.write_text("fake-video")
+
+    return {
+        "binary": str(binary),
+        "model": str(model),
+        "video": str(video),
+        "counter": counter,
+    }
+
+
+def test_detect_beats_end_to_end(fake_tools):
+    grid = detect_beats(
+        fake_tools["video"],
+        binary=fake_tools["binary"],
+        model=fake_tools["model"],
+    )
+    assert grid is not None
+    assert list(grid.times) == pytest.approx([0.5, 1.0, 1.5])
+    assert list(grid.counts) == [1, 2, 3]
+
+
+def test_detect_beats_uses_cache(fake_tools):
+    kw = dict(binary=fake_tools["binary"], model=fake_tools["model"])
+    detect_beats(fake_tools["video"], **kw)
+    detect_beats(fake_tools["video"], **kw)   # should hit cache, not re-run binary
+    n_calls = len(fake_tools["counter"].read_text().splitlines())
+    assert n_calls == 1
+
+
+def test_detect_beats_cache_disabled_reruns(fake_tools):
+    kw = dict(binary=fake_tools["binary"], model=fake_tools["model"])
+    detect_beats(fake_tools["video"], use_cache=False, **kw)
+    detect_beats(fake_tools["video"], use_cache=False, **kw)
+    n_calls = len(fake_tools["counter"].read_text().splitlines())
+    assert n_calls == 2
+
+
+def test_detect_beats_missing_tool_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setattr(beats_mod, "_cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(beats_mod, "_get_settings", lambda: None)
+    monkeypatch.delenv("WOMBAT_BEAT_THIS_BIN", raising=False)
+    monkeypatch.delenv("WOMBAT_BEAT_THIS_MODEL", raising=False)
+    monkeypatch.setattr(beats_mod.shutil, "which", lambda _: None)
+    assert detect_beats(str(tmp_path / "clip.mp4")) is None
+
+
+def test_detect_beats_binary_failure_returns_none(fake_tools, tmp_path):
+    # a binary that exits non-zero must yield None, not raise
+    failing = tmp_path / "failing"
+    _write_script(failing, 'echo "boom" >&2\nexit 3\n')
+    grid = detect_beats(
+        fake_tools["video"],
+        binary=str(failing),
+        model=fake_tools["model"],
+    )
+    assert grid is None
+
+
+# ---------------------------------------------------------- real-binary integration
+
+@pytest.mark.skipif(
+    not (os.environ.get("WOMBAT_BEAT_THIS_BIN") and resolve_beat_tool()[1]),
+    reason="real beat_this_cpp binary/model not configured",
+)
+def test_detect_beats_real_binary_smoke():
+    # Requires WOMBAT_BEAT_THIS_BIN + a resolvable model + a real media file.
+    media = os.environ.get("WOMBAT_BEAT_TEST_MEDIA")
+    if not media or not os.path.exists(media):
+        pytest.skip("set WOMBAT_BEAT_TEST_MEDIA to a real audio/video file")
+    grid = detect_beats(media, use_cache=False)
+    assert grid is not None and len(grid) > 0

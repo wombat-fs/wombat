@@ -11,13 +11,26 @@ stays trivially testable.
 """
 from __future__ import annotations
 
+import logging
+import os
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+from wombat.audio._cache import cache_key, cache_subdir, ffmpeg_path
+
+log = logging.getLogger(__name__)
 
 # count value meaning "position within bar unknown" (single-column .beats input)
 UNKNOWN_COUNT = 0
 DOWNBEAT_COUNT = 1
+
+# upper bound for one detection run; transformer inference on long audio is slow
+_DETECT_TIMEOUT_S = 600
 
 
 @dataclass(frozen=True)
@@ -131,3 +144,171 @@ def serialize_beats(grid: BeatGrid) -> str:
         else:
             lines.append(f"{float(t):.3f}\t{int(c)}")
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+# --------------------------------------------------------------------- tool resolution
+
+def _get_settings():
+    """Return AppSettings, or ``None`` if Qt settings are unavailable.
+
+    Indirected so tests can bypass the user's stored preferences.
+    """
+    try:
+        from wombat.settings import AppSettings
+        return AppSettings()
+    except Exception:   # pragma: no cover - defensive
+        return None
+
+
+def _model_beside(binary: str | None) -> str | None:
+    """Best-effort search for ``beat_this.onnx`` near the binary."""
+    if not binary:
+        return None
+    bdir = Path(binary).resolve().parent
+    candidates = [
+        bdir / "beat_this.onnx",
+        bdir / "onnx" / "beat_this.onnx",
+        bdir.parent / "onnx" / "beat_this.onnx",
+    ]
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return None
+
+
+def resolve_beat_tool(
+    binary: str | None = None, model: str | None = None
+) -> tuple[str | None, str | None]:
+    """Locate the beat_this_cpp binary and ONNX model.
+
+    Resolution order for each, first non-empty wins: explicit argument →
+    stored preference → environment variable → ``shutil.which`` (binary) /
+    model found beside the binary.  Returns ``(binary, model)`` with ``None``
+    for anything that could not be resolved.
+    """
+    settings = _get_settings() if (binary is None or model is None) else None
+
+    if not binary:
+        binary = (settings.load_beat_binary_path() if settings else "") \
+            or os.environ.get("WOMBAT_BEAT_THIS_BIN") \
+            or shutil.which("beat_this_cpp")
+    if not model:
+        model = (settings.load_beat_model_path() if settings else "") \
+            or os.environ.get("WOMBAT_BEAT_THIS_MODEL") \
+            or _model_beside(binary)
+
+    return (binary or None, model or None)
+
+
+# --------------------------------------------------------------------- disk cache
+
+def _cache_dir() -> Path:
+    return cache_subdir("beats")
+
+
+def _load_cache(video_path: str) -> BeatGrid | None:
+    path = _cache_dir() / f"{cache_key(video_path)}.npz"
+    if not path.exists():
+        return None
+    try:
+        data = np.load(path)
+        return BeatGrid(data["times"], data["counts"])
+    except Exception as exc:
+        log.debug("Beat cache read failed: %s", exc)
+        return None
+
+
+def _save_cache(video_path: str, grid: BeatGrid) -> None:
+    path = _cache_dir() / f"{cache_key(video_path)}.npz"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        np.savez(path, times=grid.times, counts=grid.counts)
+    except Exception as exc:
+        log.debug("Beat cache write failed: %s", exc)
+
+
+# --------------------------------------------------------------------- detection
+
+def _extract_audio(ffmpeg: str, video_path: str, out_wav: Path) -> bool:
+    """Decode the source audio to a mono WAV (the model resamples internally)."""
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-i", video_path,
+                "-vn",            # no video
+                "-ac", "1",       # mono
+                "-y",             # overwrite
+                str(out_wav),
+                "-loglevel", "quiet",
+            ],
+            capture_output=True,
+            timeout=120,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        log.warning("ffmpeg audio extraction failed: %s", exc)
+        return False
+    return out_wav.exists() and out_wav.stat().st_size > 0
+
+
+def detect_beats(
+    video_path: str,
+    *,
+    binary: str | None = None,
+    model: str | None = None,
+    use_cache: bool = True,
+) -> BeatGrid | None:
+    """Detect beats in a video's audio via the external ``beat_this_cpp`` binary.
+
+    Blocking; call from a background thread.  Returns ``None`` (with a log
+    message, never raising) if the tool or ffmpeg is unavailable, the audio
+    can't be decoded, or detection fails — callers degrade gracefully.
+    Results are cached on disk keyed by source path + mtime.
+    """
+    if use_cache:
+        cached = _load_cache(video_path)
+        if cached is not None:
+            log.debug("Beats loaded from cache for: %s", video_path)
+            return cached
+
+    binary, model = resolve_beat_tool(binary, model)
+    if not binary or not model:
+        log.warning("beat_this_cpp binary/model not configured — beat detection unavailable")
+        return None
+
+    ffmpeg = ffmpeg_path()
+    if ffmpeg is None:
+        log.warning("ffmpeg not found on PATH — beat detection unavailable")
+        return None
+
+    log.debug("Detecting beats: %s", video_path)
+    with tempfile.TemporaryDirectory(prefix="wombat-beats-") as td:
+        wav = Path(td) / "audio.wav"
+        beats_file = Path(td) / "out.beats"
+        if not _extract_audio(ffmpeg, video_path, wav):
+            return None
+        try:
+            proc = subprocess.run(
+                [binary, model, str(wav), "--output-beats", str(beats_file)],
+                capture_output=True,
+                timeout=_DETECT_TIMEOUT_S,
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            log.warning("beat_this_cpp invocation failed: %s", exc)
+            return None
+        if proc.returncode != 0:
+            log.warning(
+                "beat_this_cpp exited %d: %s",
+                proc.returncode,
+                proc.stderr.decode("utf-8", "replace").strip()[:500],
+            )
+            return None
+        if not beats_file.exists():
+            log.warning("beat_this_cpp produced no .beats output")
+            return None
+        grid = parse_beats(beats_file.read_text())
+
+    if use_cache:
+        _save_cache(video_path, grid)
+    log.debug("Detected %d beats for: %s", len(grid), video_path)
+    return grid

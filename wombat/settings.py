@@ -51,6 +51,18 @@ class AppSettings:
     def save_simplify_epsilon(self, v: float) -> None:
         self._qs.setValue("prefs/simplifyEpsilon", float(v))
 
+    def load_beat_binary_path(self) -> str:
+        return str(self._qs.value("prefs/beatBinaryPath", "") or "")
+
+    def save_beat_binary_path(self, v: str) -> None:
+        self._qs.setValue("prefs/beatBinaryPath", v)
+
+    def load_beat_model_path(self) -> str:
+        return str(self._qs.value("prefs/beatModelPath", "") or "")
+
+    def save_beat_model_path(self, v: str) -> None:
+        self._qs.setValue("prefs/beatModelPath", v)
+
     def load_dark_theme(self) -> bool:
         v = self._qs.value("prefs/darkTheme", True)
         return v if isinstance(v, bool) else str(v).lower() != "false"
