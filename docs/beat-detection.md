@@ -78,7 +78,7 @@ def detect_beats(video_path: str) -> BeatGrid | None:
 
 ## main_window wiring
 
-Mirror the waveform wiring (`video_loaded` → loader → timeline). Detect only when the tool resolves (no nag otherwise). Store the resulting `BeatGrid` on the editor/session so snap and snippets reach it. Cancel alongside the waveform loader on close. Manual re-detect available via the Beats menu.
+Detection is **manual only** (Beats ▸ Detect Beats) — it is expensive (transformer inference), so it never runs automatically on video load. Loading a new video only clears the previous video's stale beats and abandons any in-flight run. The resulting `BeatGrid` is stored and routed to the timeline overlay, the editor (snap), and the snippet panel via `_set_beats`. The loader is drained (`wait_all`) on close.
 
 ## Timeline overlay
 

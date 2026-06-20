@@ -88,8 +88,10 @@ class MainWindow(QMainWindow):
         self._player.video_loaded.connect(self._on_video_loaded_waveform)
         self._waveform_loader.waveform_ready.connect(self._timeline.set_waveform)
 
-        # Beat detection loader
-        self._player.video_loaded.connect(self._on_video_loaded_beats)
+        # Beat detection loader — detection runs only on explicit request
+        # (Beats ▸ Detect Beats), never automatically on video load. Loading a
+        # new video only clears the previous video's (now stale) beats.
+        self._player.video_loaded.connect(self._on_video_loaded_clear_beats)
         self._beat_loader.detection_started.connect(self._on_beat_detection_started)
         self._beat_loader.beats_ready.connect(self._on_beats_ready)
 
@@ -744,17 +746,11 @@ class MainWindow(QMainWindow):
         self._waveform_loader.load(path)
 
     @Slot(str)
-    def _on_video_loaded_beats(self, path: str) -> None:
-        """Trigger background beat detection whenever a video is loaded.
-
-        Only runs if the detector resolves — otherwise we stay silent rather
-        than nagging users who haven't configured the binary.
-        """
-        from wombat.audio.beats import resolve_beat_tool
-        self._set_beats(None)   # clear stale beats immediately
-        binary, model = resolve_beat_tool()
-        if binary and model:
-            self._beat_loader.load(path)
+    def _on_video_loaded_clear_beats(self, path: str) -> None:
+        """Drop the previous video's beats (and abandon any in-flight run) when a
+        new video loads. Detection itself is manual (Beats ▸ Detect Beats)."""
+        self._beat_loader.cancel()
+        self._set_beats(None)
 
     @Slot()
     def _on_beat_detection_started(self) -> None:
