@@ -553,7 +553,7 @@ class MainWindow(QMainWindow):
         self._settings.save_dock_state(self.saveState())
         self._backup.stop()
         self._backup.clear()
-        self._waveform_loader.cancel()
+        self._waveform_loader.wait_all()
         self._beat_loader.wait_all()
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
