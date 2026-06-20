@@ -162,6 +162,33 @@ class Euclidean(Rhythm):
         return np.array(times, dtype=np.float64)
 
 
+class DetectedBeats(Rhythm):
+    """Beats from audio analysis of the loaded video.
+
+    Unlike the other rhythms, the timing comes from a runtime ``BeatGrid``
+    rather than parameters.  The grid is injected by the snippet panel at build
+    time (it is session state, not something serialized into the project), so a
+    freshly constructed instance with no grid simply yields no beats.
+    """
+
+    def __init__(self, downbeats_only: bool = False, grid=None) -> None:
+        self.downbeats_only = downbeats_only
+        self.grid = grid   # BeatGrid | None
+
+    @classmethod
+    def param_specs(cls) -> list[ParamSpec]:
+        return [
+            ParamSpec("downbeats_only", "Downbeats only", "bool", False),
+        ]
+
+    def beats(self, span: tuple[float, float], fps: float | None) -> np.ndarray:
+        if self.grid is None or len(self.grid) == 0:
+            return np.array([], dtype=np.float64)
+        sub = self.grid.in_span(span[0], span[1])
+        times = sub.downbeats if self.downbeats_only else sub.times
+        return np.asarray(times, dtype=np.float64)
+
+
 class Accelerando(Rhythm):
     """Tempo glide from bpm_start to bpm_end across the span."""
 

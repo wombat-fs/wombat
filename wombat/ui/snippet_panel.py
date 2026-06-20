@@ -45,6 +45,7 @@ from wombat.domain.snippets.positions import (
 from wombat.domain.snippets.rhythms import (
     Accelerando,
     ConstantBeat,
+    DetectedBeats,
     Euclidean,
     Subdivided,
     Swing,
@@ -58,6 +59,7 @@ _RHYTHMS: dict[str, type] = {
     "Swing": Swing,
     "Euclidean": Euclidean,
     "Accelerando": Accelerando,
+    "Detected Beats": DetectedBeats,
 }
 
 _POS_ALGOS: dict[str, type] = {
@@ -211,6 +213,7 @@ class SnippetPanel(QWidget):
         self._rhythm_controls: dict[str, QWidget] = {}
         self._pos_controls: dict[str, QWidget] = {}
         self._current_entry: SnippetEntry | None = None
+        self._beats_grid = None   # BeatGrid | None — injected into DetectedBeats rhythms
         self._editing_layer_index: int | None = None  # set when editing an existing snippet layer
         self._syncing: bool = False                   # guard against re-entry during load
         self._preview_timer = QTimer(self)
@@ -376,6 +379,8 @@ class SnippetPanel(QWidget):
                 rhythm_params = {k: v for k, v in params.items() if k in rhythm_specs}
                 pos_params = {k: v for k, v in params.items() if k in pos_specs}
                 rhythm = rhythm_cls(**rhythm_params)
+                if isinstance(rhythm, DetectedBeats):
+                    rhythm.grid = self._beats_grid   # session state, not a param
                 pos = pos_cls(**pos_params)
                 return BeatSnippet(rhythm=rhythm, pos=pos, name=entry.name)
         except Exception as exc:
@@ -609,3 +614,11 @@ class SnippetPanel(QWidget):
     def set_span_from_selection(self) -> None:
         """Called externally when the timeline selection changes."""
         self._use_selection_span()
+
+    def set_beats(self, grid) -> None:
+        """Provide the current detected beat grid for DetectedBeats rhythms.
+
+        Refreshes the preview so a 'Detected' preset reflects the new beats.
+        """
+        self._beats_grid = grid
+        self._schedule_preview()

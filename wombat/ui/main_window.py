@@ -759,12 +759,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Detected {len(grid)} beats.", 5000)
 
     def _set_beats(self, grid: object) -> None:
-        """Store the active beat grid and route it to the timeline overlay and
-        the editor (for snap-to-beats).  Later commits also route it to the
-        snippet system."""
+        """Store the active beat grid and route it to the timeline overlay, the
+        editor (snap-to-beats), and the snippet panel (DetectedBeats rhythm)."""
         self._beats = grid
         self._timeline.set_beats(grid)
         self._editor.set_beats(grid)
+        self._snippet_panel.set_beats(grid)
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:

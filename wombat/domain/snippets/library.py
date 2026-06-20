@@ -22,6 +22,7 @@ from wombat.domain.snippets.positions import (
 from wombat.domain.snippets.rhythms import (
     Accelerando,
     ConstantBeat,
+    DetectedBeats,
     Euclidean,
     Subdivided,
     Swing,
@@ -65,6 +66,17 @@ PRESETS: list[SnippetEntry] = [
     _beat("Subdivided 16ths", "Beat",
           Subdivided(bpm=120.0, subdivisions=4), Alternate(low=0, high=100),
           "120 BPM in 16th-note subdivisions."),
+
+    # ---- Detected beats (timing from audio analysis of the loaded video)
+    _beat("On Beats", "Detected",
+          DetectedBeats(), Alternate(low=0, high=100),
+          "Alternating positions on each detected beat. Requires beat detection."),
+    _beat("On Downbeats", "Detected",
+          DetectedBeats(downbeats_only=True), Alternate(low=0, high=100),
+          "Alternating positions on each detected downbeat (bar start)."),
+    _beat("Throb on Beats", "Detected",
+          DetectedBeats(), Sine(amplitude=40.0, frequency=0.5, center=50),
+          "Sinusoidal positions sampled at detected beats."),
 
     # ---- Euclidean patterns
     _beat("Pulse Train 3/8", "Euclidean",
