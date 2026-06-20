@@ -20,6 +20,7 @@ from wombat.domain.funscript_io import FunscriptError
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
 from wombat.app.autobackup import AutoBackupManager
+from wombat.audio.beat_loader import BeatDetectionLoader
 from wombat.audio.loader import WaveformLoader
 from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.channels_panel import ChannelsPanel
@@ -60,6 +61,8 @@ class MainWindow(QMainWindow):
 
         self._backup = AutoBackupManager()
         self._waveform_loader = WaveformLoader(self)
+        self._beat_loader = BeatDetectionLoader(self)
+        self._beats = None   # BeatGrid | None — latest detected/imported beats
 
         self._build_central()
         self._build_docks()
@@ -84,6 +87,11 @@ class MainWindow(QMainWindow):
         # Waveform loader
         self._player.video_loaded.connect(self._on_video_loaded_waveform)
         self._waveform_loader.waveform_ready.connect(self._timeline.set_waveform)
+
+        # Beat detection loader
+        self._player.video_loaded.connect(self._on_video_loaded_beats)
+        self._beat_loader.detection_started.connect(self._on_beat_detection_started)
+        self._beat_loader.beats_ready.connect(self._on_beats_ready)
 
     # ------------------------------------------------------------------ layout
 
@@ -521,6 +529,7 @@ class MainWindow(QMainWindow):
         self._backup.stop()
         self._backup.clear()
         self._waveform_loader.cancel()
+        self._beat_loader.cancel()
         self._mpv_widget.closeEvent(event)
         self._player.shutdown()
         super().closeEvent(event)
@@ -710,6 +719,36 @@ class MainWindow(QMainWindow):
         """Trigger background waveform extraction whenever a video is loaded."""
         self._timeline.set_waveform(None)   # clear stale waveform immediately
         self._waveform_loader.load(path)
+
+    @Slot(str)
+    def _on_video_loaded_beats(self, path: str) -> None:
+        """Trigger background beat detection whenever a video is loaded.
+
+        Only runs if the detector resolves — otherwise we stay silent rather
+        than nagging users who haven't configured the binary.
+        """
+        from wombat.audio.beats import resolve_beat_tool
+        self._set_beats(None)   # clear stale beats immediately
+        binary, model = resolve_beat_tool()
+        if binary and model:
+            self._beat_loader.load(path)
+
+    @Slot()
+    def _on_beat_detection_started(self) -> None:
+        self.statusBar().showMessage("Detecting beats…")
+
+    @Slot(object)
+    def _on_beats_ready(self, grid: object) -> None:
+        self._set_beats(grid)
+        if grid is None:
+            self.statusBar().showMessage("Beat detection failed.", 5000)
+        else:
+            self.statusBar().showMessage(f"Detected {len(grid)} beats.", 5000)
+
+    def _set_beats(self, grid: object) -> None:
+        """Store the active beat grid; later commits route it to the overlay,
+        snap, and snippet system."""
+        self._beats = grid
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:

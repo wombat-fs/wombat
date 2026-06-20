@@ -9,12 +9,16 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 if TYPE_CHECKING:
@@ -81,6 +85,26 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(synth_group)
 
+        # --- Beat detection ---
+        beat_group = QGroupBox("Beat Detection")
+        beat_form = QFormLayout(beat_group)
+
+        self._beat_bin = QLineEdit()
+        self._beat_bin.setPlaceholderText("Path to beat_this_cpp executable")
+        self._beat_bin.textChanged.connect(self._update_beat_status)
+        beat_form.addRow("Detector binary", self._path_row(self._beat_bin, self._browse_beat_bin))
+
+        self._beat_model = QLineEdit()
+        self._beat_model.setPlaceholderText("Auto-detected next to binary if blank")
+        self._beat_model.textChanged.connect(self._update_beat_status)
+        beat_form.addRow("ONNX model", self._path_row(self._beat_model, self._browse_beat_model))
+
+        self._beat_status = QLabel()
+        self._beat_status.setWordWrap(True)
+        beat_form.addRow("", self._beat_status)
+
+        layout.addWidget(beat_group)
+
         # --- Keybindings hint ---
         kb_group = QGroupBox("Keybindings")
         kb_layout = QVBoxLayout(kb_group)
@@ -114,12 +138,74 @@ class PreferencesDialog(QDialog):
         self._snap.setChecked(self._settings.load_snap_to_frame())
         self._synth_hz.setValue(int(self._settings.load_synthesis_hz()))
         self._epsilon.setValue(self._settings.load_simplify_epsilon())
+        self._beat_bin.setText(self._settings.load_beat_binary_path())
+        self._beat_model.setText(self._settings.load_beat_model_path())
+        self._update_beat_status()
 
     def _save_and_accept(self) -> None:
         self._settings.save_snap_to_frame(self._snap.isChecked())
         self._settings.save_synthesis_hz(float(self._synth_hz.value()))
         self._settings.save_simplify_epsilon(self._epsilon.value())
+        self._settings.save_beat_binary_path(self._beat_bin.text().strip())
+        self._settings.save_beat_model_path(self._beat_model.text().strip())
         self.accept()
+
+    # ----------------------------------------------------------------- beat detection
+
+    @staticmethod
+    def _path_row(line_edit: QLineEdit, browse_slot) -> QWidget:
+        """A QLineEdit + Browse… button packed into one row widget."""
+        row = QWidget()
+        hbox = QHBoxLayout(row)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.addWidget(line_edit, stretch=1)
+        btn = QPushButton("Browse…")
+        btn.clicked.connect(browse_slot)
+        hbox.addWidget(btn)
+        return row
+
+    def _browse_beat_bin(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Select beat detector binary")
+        if path:
+            self._beat_bin.setText(path)
+
+    def _browse_beat_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select ONNX model", "", "ONNX model (*.onnx);;All files (*)"
+        )
+        if path:
+            self._beat_model.setText(path)
+
+    def _update_beat_status(self) -> None:
+        """Resolve binary/model from the current fields and report what's found."""
+        from wombat.audio.beats import resolve_beat_tool
+        binary = self._beat_bin.text().strip() or None
+        model = self._beat_model.text().strip() or None
+        rb, rm = resolve_beat_tool(binary, model)
+
+        if not rb:
+            self._beat_status.setText(
+                '<span style="color:#c0392b;">No detector binary found — '
+                "beat detection is disabled.</span>"
+            )
+        elif not rm:
+            self._beat_status.setText(
+                '<span style="color:#c0392b;">Binary found, but no ONNX model '
+                "could be located.</span>"
+            )
+        elif not Path(rb).exists():
+            self._beat_status.setText(
+                f'<span style="color:#c0392b;">Binary not found: {rb}</span>'
+            )
+        elif not Path(rm).exists():
+            self._beat_status.setText(
+                f'<span style="color:#c0392b;">Model not found: {rm}</span>'
+            )
+        else:
+            self._beat_status.setText(
+                f'<span style="color:#27ae60;">Ready.</span> '
+                f'<small style="color:#888;">model: {Path(rm).name}</small>'
+            )
 
     # ----------------------------------------------------------------- actions
 
