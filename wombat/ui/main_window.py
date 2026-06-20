@@ -337,6 +337,11 @@ class MainWindow(QMainWindow):
         waveform_action.setChecked(True)
         waveform_action.toggled.connect(self._timeline.set_waveform_visible)
 
+        beats_action = view_menu.addAction("Beat Markers")
+        beats_action.setCheckable(True)
+        beats_action.setChecked(True)
+        beats_action.toggled.connect(self._timeline.set_beats_visible)
+
         view_menu.addSeparator()
 
         self._dark_theme_action = view_menu.addAction("Dark Theme")
@@ -746,9 +751,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Detected {len(grid)} beats.", 5000)
 
     def _set_beats(self, grid: object) -> None:
-        """Store the active beat grid; later commits route it to the overlay,
-        snap, and snippet system."""
+        """Store the active beat grid and route it to the timeline overlay.
+        Later commits also route it to snap and the snippet system."""
         self._beats = grid
+        self._timeline.set_beats(grid)
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:

@@ -6,7 +6,9 @@ Paint order per frame:
   3. Per-lane: height guides → line segments → action nodes → channel label
   4. Active-lane border (subtle highlight)
   5. Rubber-band rectangle (if dragging)
-  6. Playhead (on top of everything)
+  6. Beat ticks (detected beats; downbeats emphasized)
+  7. Chapter markers
+  8. Playhead (on top of everything)
 
 Mouse interactions (requires EditorController via set_editor()):
   Left-click inactive lane → activate that channel (no edit)
@@ -41,6 +43,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from wombat.audio.beats import DOWNBEAT_COUNT
 from wombat.domain.action import Action
 from wombat.domain.channel import Channel
 from wombat.playback.player import VideoPlayer
@@ -80,6 +83,8 @@ _SPAN_BORDER = QColor(255, 255, 255, 70)
 _FADE_HANDLE = QColor(255, 200, 80, 200)
 _GHOST_ALPHA = 0.18
 _CHAPTER_COLOR = QColor(240, 192, 48, 220)   # gold, slightly transparent
+_BEAT_COLOR = QColor(90, 210, 220, 55)       # detected beat tick — dim teal
+_DOWNBEAT_COLOR = QColor(130, 230, 245, 150)  # downbeat (bar start) — brighter
 
 _LANE_COLORS: list[QColor] = [
     QColor("#00a8e8"),
@@ -189,6 +194,8 @@ class TimelineWidget(QWidget):
         self._show_heatmap: bool = False
         self._show_waveform: bool = True
         self._waveform = None   # WaveformData | None
+        self._show_beats: bool = True
+        self._beats = None      # BeatGrid | None
 
         # editing state
         self._editor: EditorController | None = None
@@ -245,6 +252,15 @@ class TimelineWidget(QWidget):
 
     def set_waveform_visible(self, visible: bool) -> None:
         self._show_waveform = visible
+        self.update()
+
+    def set_beats(self, grid) -> None:
+        """Set the detected/imported beat grid (BeatGrid or None) and repaint."""
+        self._beats = grid
+        self.update()
+
+    def set_beats_visible(self, visible: bool) -> None:
+        self._show_beats = visible
         self.update()
 
     def set_editor(self, editor: EditorController) -> None:
@@ -962,6 +978,7 @@ class TimelineWidget(QWidget):
         if self._drag_mode == _DragMode.RUBBER_BAND:
             self._draw_rubber_band(painter)
 
+        self._draw_beats(painter)
         self._draw_chapter_markers(painter)
         self._draw_playhead(painter)
         painter.end()
@@ -1296,6 +1313,32 @@ class TimelineWidget(QWidget):
         src_rect = QRectF(src_x, 0.0, src_w, float(h))
         dst_rect = QRectF(0.0, float(lane.top), float(w), float(h))
         painter.drawPixmap(dst_rect, pixmap, src_rect)
+
+    def _draw_beats(self, painter: QPainter) -> None:
+        """Vertical ticks at detected beats; downbeats brighter and full-height,
+        other beats dimmer.  Drawn over the waveform, under chapters/playhead."""
+        if not self._show_beats or self._beats is None or len(self._beats) == 0:
+            return
+        top = _RULER_H
+        bottom = self.height()
+        t0, t1 = self._viewport.time_window()
+        sub = self._beats.in_span(t0, t1)
+        if len(sub) == 0:
+            return
+        painter.save()
+        beat_pen = QPen(_BEAT_COLOR, 1)
+        down_pen = QPen(_DOWNBEAT_COLOR, 1)
+        width = self.width()
+        for t, c in zip(sub.times, sub.counts):
+            x = int(self._viewport.time_to_x(float(t)))
+            if not (0 <= x <= width):
+                continue
+            if int(c) == DOWNBEAT_COUNT:
+                painter.setPen(down_pen)
+            else:
+                painter.setPen(beat_pen)
+            painter.drawLine(x, top, x, bottom)
+        painter.restore()
 
     def _draw_chapter_markers(self, painter: QPainter) -> None:
         if self._project is None or not self._project.chapters:
