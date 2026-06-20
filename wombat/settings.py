@@ -33,6 +33,13 @@ class AppSettings:
     def save_snap_to_frame(self, v: bool) -> None:
         self._qs.setValue("prefs/snapToFrame", v)
 
+    def load_snap_to_beats(self) -> bool:
+        v = self._qs.value("prefs/snapToBeats", False)
+        return v if isinstance(v, bool) else str(v).lower() == "true"
+
+    def save_snap_to_beats(self, v: bool) -> None:
+        self._qs.setValue("prefs/snapToBeats", v)
+
     def load_synthesis_hz(self) -> float:
         try:
             return float(self._qs.value("prefs/synthesisHz", 60.0))

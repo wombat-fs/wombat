@@ -57,6 +57,12 @@ class PreferencesDialog(QDialog):
         )
         edit_form.addRow("Snap to frame by default", self._snap)
 
+        self._snap_beats = QCheckBox()
+        self._snap_beats.setToolTip(
+            "When enabled, actions are snapped to the nearest detected beat."
+        )
+        edit_form.addRow("Snap to beats by default", self._snap_beats)
+
         layout.addWidget(edit_group)
 
         # --- Synthesis ---
@@ -136,6 +142,7 @@ class PreferencesDialog(QDialog):
 
     def _load(self) -> None:
         self._snap.setChecked(self._settings.load_snap_to_frame())
+        self._snap_beats.setChecked(self._settings.load_snap_to_beats())
         self._synth_hz.setValue(int(self._settings.load_synthesis_hz()))
         self._epsilon.setValue(self._settings.load_simplify_epsilon())
         self._beat_bin.setText(self._settings.load_beat_binary_path())
@@ -144,6 +151,7 @@ class PreferencesDialog(QDialog):
 
     def _save_and_accept(self) -> None:
         self._settings.save_snap_to_frame(self._snap.isChecked())
+        self._settings.save_snap_to_beats(self._snap_beats.isChecked())
         self._settings.save_synthesis_hz(float(self._synth_hz.value()))
         self._settings.save_simplify_epsilon(self._epsilon.value())
         self._settings.save_beat_binary_path(self._beat_bin.text().strip())

@@ -355,6 +355,10 @@ class MainWindow(QMainWindow):
         self._snap_action.setCheckable(True)
         self._snap_action.toggled.connect(self._on_snap_toggled)
 
+        self._snap_beats_action = view_menu.addAction("Snap to Beats")
+        self._snap_beats_action.setCheckable(True)
+        self._snap_beats_action.toggled.connect(self._on_snap_beats_toggled)
+
         help_menu = mb.addMenu("&Help")
         about_action = help_menu.addAction("About Wombat")
         about_action.triggered.connect(self._show_about)
@@ -445,6 +449,10 @@ class MainWindow(QMainWindow):
         snap = self._settings.load_snap_to_frame()
         self._editor.snap_to_frame = snap
         self._snap_action.setChecked(snap)
+
+        snap_beats = self._settings.load_snap_to_beats()
+        self._editor.snap_to_beats = snap_beats
+        self._snap_beats_action.setChecked(snap_beats)
 
     @Slot()
     def _show_metadata(self) -> None:
@@ -751,10 +759,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Detected {len(grid)} beats.", 5000)
 
     def _set_beats(self, grid: object) -> None:
-        """Store the active beat grid and route it to the timeline overlay.
-        Later commits also route it to snap and the snippet system."""
+        """Store the active beat grid and route it to the timeline overlay and
+        the editor (for snap-to-beats).  Later commits also route it to the
+        snippet system."""
         self._beats = grid
         self._timeline.set_beats(grid)
+        self._editor.set_beats(grid)
 
     @Slot(str)
     def _on_video_loaded(self, path: str) -> None:
@@ -797,6 +807,9 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _on_snap_toggled(self, checked: bool) -> None:
         self._editor.snap_to_frame = checked
+
+    def _on_snap_beats_toggled(self, checked: bool) -> None:
+        self._editor.snap_to_beats = checked
 
     def _update_title(self) -> None:
         dirty = " *" if self._project.has_unsaved_edits() else ""

@@ -15,6 +15,7 @@ class _StubSettings:
     def __init__(self, **vals):
         self._v = {
             "snap": False,
+            "snap_beats": False,
             "hz": 60.0,
             "eps": 0.5,
             "beat_bin": "",
@@ -24,6 +25,8 @@ class _StubSettings:
 
     def load_snap_to_frame(self): return self._v["snap"]
     def save_snap_to_frame(self, v): self._v["snap"] = v
+    def load_snap_to_beats(self): return self._v["snap_beats"]
+    def save_snap_to_beats(self, v): self._v["snap_beats"] = v
     def load_synthesis_hz(self): return self._v["hz"]
     def save_synthesis_hz(self, v): self._v["hz"] = v
     def load_simplify_epsilon(self): return self._v["eps"]

@@ -58,6 +58,8 @@ class EditorController(QObject):
         self._selections: dict[tuple[int, int], frozenset[float]] = {}  # (ch,layer) → sel
         self._clipboard: list[Action] = []
         self._snap_to_frame: bool = False
+        self._snap_to_beats: bool = False
+        self._beats = None   # BeatGrid | None — snap target for snap-to-beats
         # gesture state
         self._pre_move_snapshot: ActionList = ActionList()
         self._pre_move_selection: frozenset[float] = frozenset()
@@ -140,17 +142,41 @@ class EditorController(QObject):
     def snap_to_frame(self, value: bool) -> None:
         self._snap_to_frame = value
 
+    @property
+    def snap_to_beats(self) -> bool:
+        return self._snap_to_beats
+
+    @snap_to_beats.setter
+    def snap_to_beats(self, value: bool) -> None:
+        self._snap_to_beats = value
+
+    def set_beats(self, grid) -> None:
+        """Set the beat grid used when snap-to-beats is enabled (BeatGrid or None)."""
+        self._beats = grid
+
     def _snap(self, at: float) -> float:
-        ft = self._player.frame_time
-        return round(at / ft) * ft if ft > 0 else at
+        """Apply the active snap modes to a timestamp.
+
+        Beats first (musical intent), then frame-quantize the result, so a
+        beat-snapped point still lands on a frame boundary when both are on.
+        Returns ``at`` unchanged when no snap mode is active.
+        """
+        if self._snap_to_beats and self._beats is not None and len(self._beats):
+            nb = self._beats.nearest(at)
+            if nb is not None:
+                at = nb
+        if self._snap_to_frame:
+            ft = self._player.frame_time
+            if ft > 0:
+                at = round(at / ft) * ft
+        return at
 
     # ----------------------------------------------------------------- single edits
 
     def add_action(self, at: float, pos: int) -> None:
         if not self.has_active_channel:
             return
-        if self._snap_to_frame:
-            at = self._snap(at)
+        at = self._snap(at)
         at = max(0.0, at)
         self._undo.snapshot("Add action", self._targets(), self.selection)
         self._layer().add(Action(at, pos))
@@ -194,8 +220,7 @@ class EditorController(QObject):
     def edit_action(self, old_at: float, new_at: float, new_pos: int) -> None:
         if not self.has_active_channel:
             return
-        if self._snap_to_frame:
-            new_at = self._snap(new_at)
+        new_at = self._snap(new_at)
         self._undo.snapshot("Edit action", self._targets(), self.selection)
         layer = self._layer()
         try:
@@ -286,8 +311,7 @@ class EditorController(QObject):
         for a in self._pre_move_snapshot:
             if a.at in self._pre_move_selection:
                 new_at = max(0.0, a.at + d_seconds)
-                if self._snap_to_frame:
-                    new_at = self._snap(new_at)
+                new_at = self._snap(new_at)
                 new_pos = max(0, min(100, a.pos + d_pos))
                 new_al.add(Action(new_at, new_pos))
                 new_sel.add(new_at)
@@ -432,8 +456,7 @@ class EditorController(QObject):
         new_ats: set[float] = set()
         for a in self._clipboard:
             at = at_playhead + (a.at - t0)
-            if self._snap_to_frame:
-                at = self._snap(at)
+            at = self._snap(at)
             ch.layers[li].actions.add(Action(at, a.pos))
             new_ats.add(at)
         ch._invalidate_cache()
