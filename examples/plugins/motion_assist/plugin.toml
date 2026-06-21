@@ -1,0 +1,8 @@
+[plugin]
+name = "Motion Assist"
+id = "motion_assist"
+version = "0.1.0"
+entry = "motion_assist:MotionAssistPlugin"
+api = "1"
+capabilities = ["edit_actions", "write_layer", "player_read", "async_tasks"]
+description = "Generate a motion-derived stroke pattern into its own layer (reference plugin)."
