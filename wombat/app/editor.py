@@ -657,6 +657,49 @@ class EditorController(QObject):
         ch._invalidate_cache()
         self._emit_structure()
 
+    def merge_layer_down(self, index: int) -> None:
+        """Merge the layer at ``index`` into the layer below it (``index - 1``).
+
+        The lower layer is replaced by the composite of the two and the upper layer
+        is removed — the layer-stack equivalent of "merge down" in image editors.
+        The lower layer is treated as the base of the pair, so its blend/span/fades
+        (its relationship to the rest of the stack below) are preserved on the
+        result. No-op on the base layer (nothing below it). One undo step.
+        """
+        if not self.has_active_channel:
+            return
+        ch = self.active_channel
+        if not (1 <= index < len(ch.layers)):
+            return
+        from wombat.domain.synthesis import get_default_params, synthesize
+        lower = ch.layers[index - 1]
+        upper = ch.layers[index]
+        merged_actions = synthesize([lower, upper], get_default_params())
+        self._undo.snapshot_structural(
+            "Merge layer down", ch, self.active_layer_index, self.selection
+        )
+        merged = Layer(
+            actions=merged_actions,
+            name=lower.name,
+            enabled=lower.enabled,
+            blend=lower.blend,
+            span=lower.span,
+            fade_in=lower.fade_in,
+            fade_out=lower.fade_out,
+            center=lower.center,
+            fade_curve=lower.fade_curve,
+        )
+        ch.layers[index - 1] = merged
+        del ch.layers[index]
+        ci = self._channel_index(ch)
+        if ci is not None:
+            cur = self._active_layer_indices.get(ci, 0)
+            # The merged result lives at index-1; keep focus sensible.
+            new_idx = index - 1 if cur >= index else cur
+            self._active_layer_indices[ci] = max(0, min(new_idx, len(ch.layers) - 1))
+        ch._invalidate_cache()
+        self._emit_structure()
+
     def set_blend(self, index: int, blend: BlendMode) -> None:
         if not self.has_active_channel:
             return

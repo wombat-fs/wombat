@@ -1,7 +1,8 @@
 """ChannelsPanel — channel→layer tree dock.
 
 Top level: one item per channel (enabled checkbox, active indicator, name).
-Second level: one item per layer (enabled checkbox, blend badge, active indicator, name).
+Second level: one item per layer (enabled checkbox, blend badge, active indicator, name),
+shown top-of-stack first and the base last (image/audio-editor convention).
 
 Channel ops drive Project directly; layer ops drive EditorController.
 """
@@ -214,7 +215,11 @@ class ChannelsPanel(QWidget):
             ch_item.setData(0, _ROLE_LAYER_IDX, -1)
             self._tree.addTopLevelItem(ch_item)
 
-            for li, layer in enumerate(ch.layers):
+            # Display top-of-stack (highest index, the overriding layer) first and
+            # the base last, matching image/audio editors. _ROLE_LAYER_IDX always
+            # stores the true model index, so layer logic is unaffected by view order.
+            for li in range(len(ch.layers) - 1, -1, -1):
+                layer = ch.layers[li]
                 blend_badge = _BLEND_BADGES.get(layer.blend, _BLEND_OVERRIDE)
                 label = f"  {blend_badge}  {layer.name}"
                 l_item = QTreeWidgetItem([label])
@@ -289,8 +294,9 @@ class ChannelsPanel(QWidget):
         self._btn_add_layer.setEnabled(has_editor and has_ch)
         self._btn_dup_layer.setEnabled(has_editor and is_layer)
         self._btn_remove_layer.setEnabled(has_editor and is_layer and n_layers > 1)
-        self._btn_layer_up.setEnabled(has_editor and is_layer and li > 0)
-        self._btn_layer_down.setEnabled(has_editor and is_layer and 0 <= li < n_layers - 1)
+        # List is top-of-stack first, so visual "up" = toward higher model index.
+        self._btn_layer_up.setEnabled(has_editor and is_layer and 0 <= li < n_layers - 1)
+        self._btn_layer_down.setEnabled(has_editor and is_layer and li > 0)
 
     # ----------------------------------------------------------------- signals
 
@@ -385,6 +391,11 @@ class ChannelsPanel(QWidget):
             blend_actions[act] = mode
 
         menu.addSeparator()
+        merge_action = menu.addAction("Merge Down")
+        merge_action.setToolTip("Bake this layer into the layer below it in the stack")
+        merge_action.setEnabled(li >= 1)
+
+        menu.addSeparator()
         delete_action = menu.addAction("Delete Layer")
         delete_action.setEnabled(len(ch.layers) > 1)
 
@@ -393,6 +404,8 @@ class ChannelsPanel(QWidget):
             new_blend = blend_actions[chosen]
             if new_blend != layer.blend:
                 self._editor.set_blend(li, new_blend)
+        elif chosen is merge_action and li >= 1:
+            self._editor.merge_layer_down(li)
         elif chosen is delete_action and len(ch.layers) > 1:
             self._editor.remove_layer(li)
 
@@ -508,14 +521,7 @@ class ChannelsPanel(QWidget):
 
     @Slot()
     def _move_layer_up(self) -> None:
-        if self._editor is None:
-            return
-        _ci, li = self._active_ci_li()
-        if li > 0:
-            self._editor.reorder_layer(li, li - 1)
-
-    @Slot()
-    def _move_layer_down(self) -> None:
+        """Move the layer up in the list — i.e. toward the top of the stack (higher index)."""
         if self._editor is None:
             return
         ch_idx, li = self._active_ci_li()
@@ -523,3 +529,12 @@ class ChannelsPanel(QWidget):
             n = len(self._project.channels[ch_idx].layers)
             if li < n - 1:
                 self._editor.reorder_layer(li, li + 1)
+
+    @Slot()
+    def _move_layer_down(self) -> None:
+        """Move the layer down in the list — i.e. toward the base (lower index)."""
+        if self._editor is None:
+            return
+        _ci, li = self._active_ci_li()
+        if li > 0:
+            self._editor.reorder_layer(li, li - 1)
