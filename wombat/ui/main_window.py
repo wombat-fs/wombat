@@ -26,7 +26,9 @@ from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.channels_panel import ChannelsPanel
 from wombat.ui.device_simulator import SimulatorOverlay
 from wombat.ui.events_panel import EventsPanel
+from wombat.ui.heatmap_export import render_heatmap
 from wombat.ui.mpv_widget import MpvWidget
+from wombat.ui.plugins_controller import PluginsController
 from wombat.ui.preferences_dialog import PreferencesDialog
 from wombat.ui.scripting import AlternatingMode, DefaultMode, RecordingMode, ScriptingMode
 from wombat.ui.scripting.recording_panel import RecordingPanel
@@ -66,6 +68,7 @@ class MainWindow(QMainWindow):
 
         self._build_central()
         self._build_docks()
+        self._plugins = PluginsController(self, self._editor, self._player, self._settings)
         self._build_menus()
         self._build_playback_shortcuts()
         self._restore_state()
@@ -224,6 +227,14 @@ class MainWindow(QMainWindow):
         export_action.setShortcut(kb["export"])
         export_action.triggered.connect(self._export_funscripts)
 
+        heatmap_action = file_menu.addAction("Export Heatmap Image…")
+        heatmap_action.triggered.connect(lambda: self._export_heatmap(with_chapters=False))
+
+        self._heatmap_chapters_action = file_menu.addAction("Export Heatmap with Chapters…")
+        self._heatmap_chapters_action.triggered.connect(
+            lambda: self._export_heatmap(with_chapters=True)
+        )
+
         file_menu.addSeparator()
         quit_action = file_menu.addAction("&Quit")
         quit_action.setShortcut(kb["quit"])
@@ -257,9 +268,76 @@ class MainWindow(QMainWindow):
             lambda: self._editor.paste(self._player.logical_time)
         )
 
-        select_all_action = edit_menu.addAction("Select All")
+        select_menu = edit_menu.addMenu("Select")
+
+        select_all_action = select_menu.addAction("Select All")
         select_all_action.setShortcut(kb["select_all"])
         select_all_action.triggered.connect(self._editor.select_all)
+
+        select_left_action = select_menu.addAction("Select Left of Playhead")
+        select_left_action.setShortcut(kb["select_left"])
+        select_left_action.triggered.connect(
+            lambda: self._editor.select_left_of_playhead()
+        )
+
+        select_right_action = select_menu.addAction("Select Right of Playhead")
+        select_right_action.setShortcut(kb["select_right"])
+        select_right_action.triggered.connect(
+            lambda: self._editor.select_right_of_playhead()
+        )
+
+        select_menu.addSeparator()
+
+        sel_start_action = select_menu.addAction("Set Selection Start")
+        sel_start_action.setShortcut(kb["selection_start"])
+        sel_start_action.setToolTip("Mark the range start at the playhead")
+        sel_start_action.triggered.connect(self._editor.set_selection_start)
+
+        sel_end_action = select_menu.addAction("Set Selection End")
+        sel_end_action.setShortcut(kb["selection_end"])
+        sel_end_action.setToolTip("Select all actions from the marked start to the playhead")
+        sel_end_action.triggered.connect(self._editor.set_selection_end)
+
+        select_menu.addSeparator()
+
+        isolate_action = select_menu.addAction("Isolate Action")
+        isolate_action.setShortcut(kb["isolate_action"])
+        isolate_action.setToolTip("Remove the neighbours of the action nearest the playhead")
+        isolate_action.triggered.connect(self._editor.isolate_action)
+
+        select_menu.addSeparator()
+
+        select_top_action = select_menu.addAction("Top Points Only")
+        select_top_action.setShortcut(kb["select_top"])
+        select_top_action.setToolTip("Keep only the peak points in the current selection")
+        select_top_action.triggered.connect(self._editor.select_top)
+
+        select_mid_action = select_menu.addAction("Middle Points Only")
+        select_mid_action.setShortcut(kb["select_mid"])
+        select_mid_action.setToolTip("Keep only the mid-height points in the current selection")
+        select_mid_action.triggered.connect(self._editor.select_mid)
+
+        select_bottom_action = select_menu.addAction("Bottom Points Only")
+        select_bottom_action.setShortcut(kb["select_bottom"])
+        select_bottom_action.setToolTip("Keep only the valley points in the current selection")
+        select_bottom_action.triggered.connect(self._editor.select_bottom)
+
+        transform_menu = edit_menu.addMenu("Transform")
+
+        invert_action = transform_menu.addAction("Invert Positions")
+        invert_action.setShortcut(kb["invert_actions"])
+        invert_action.setToolTip("Flip selected positions (pos → range − pos)")
+        invert_action.triggered.connect(self._editor.invert_positions)
+
+        equalize_action = transform_menu.addAction("Equalize")
+        equalize_action.setShortcut(kb["equalize_actions"])
+        equalize_action.setToolTip("Even out the timing of the selected actions")
+        equalize_action.triggered.connect(self._editor.equalize_selection)
+
+        simplify_action = transform_menu.addAction("Simplify")
+        simplify_action.setShortcut(kb["simplify_actions"])
+        simplify_action.setToolTip("Reduce points with the Ramer–Douglas–Peucker algorithm")
+        simplify_action.triggered.connect(self._simplify_selection)
 
         delete_action = edit_menu.addAction("Delete")
         delete_action.setShortcut(kb["delete"])
@@ -370,6 +448,10 @@ class MainWindow(QMainWindow):
         self._snap_beats_action = view_menu.addAction("Snap to Beats")
         self._snap_beats_action.setCheckable(True)
         self._snap_beats_action.toggled.connect(self._on_snap_beats_toggled)
+
+        # Plugins menu — populated from the user plugins directory.
+        self._plugins.install_menu(mb)
+        self._plugins.restore_enabled()
 
         help_menu = mb.addMenu("&Help")
         about_action = help_menu.addAction("About Wombat")
@@ -551,6 +633,7 @@ class MainWindow(QMainWindow):
         self._project.view.visible_time = vt
         self._settings.save_geometry(self.saveGeometry())
         self._settings.save_dock_state(self.saveState())
+        self._plugins.shutdown()
         self._backup.stop()
         self._backup.clear()
         self._waveform_loader.wait_all()
@@ -736,6 +819,61 @@ class MainWindow(QMainWindow):
             f"Exported {len(written)} file(s):\n{names}",
         )
         log.info("Exported %d funscripts to %s", len(written), out_dir)
+
+    def _simplify_selection(self) -> None:
+        """Run RDP simplify on the selection using the epsilon from Preferences."""
+        self._editor.simplify_selection(self._settings.load_simplify_epsilon())
+
+    def _export_heatmap(self, with_chapters: bool) -> None:
+        if not self._editor.has_active_channel:
+            QMessageBox.warning(self, "Export Heatmap", "No active channel to export.")
+            return
+        channel = self._editor.active_channel
+        actions = channel.synthesize()
+        if len(actions) < 2:
+            QMessageBox.warning(
+                self, "Export Heatmap", "The active channel has too few actions."
+            )
+            return
+
+        duration = self._player.duration
+        if duration <= 0:
+            duration = actions[len(actions) - 1].at
+        if duration <= 0:
+            QMessageBox.warning(
+                self, "Export Heatmap", "Cannot determine the script duration."
+            )
+            return
+
+        chapters = None
+        if with_chapters:
+            if not self._project.chapters:
+                QMessageBox.warning(
+                    self, "Export Heatmap", "This project has no chapters."
+                )
+                return
+            chapters = self._project.chapters
+
+        if self._project.media_path is not None:
+            stem = Path(self._project.media_path).stem
+            default_dir = Path(self._project.media_path).parent
+        else:
+            stem = channel.name
+            default_dir = Path.home()
+        suffix = ".heatmap-chapters.png" if with_chapters else ".heatmap.png"
+        default_path = str(default_dir / f"{stem}{suffix}")
+
+        out, _ = QFileDialog.getSaveFileName(
+            self, "Export Heatmap Image", default_path, "PNG Image (*.png)"
+        )
+        if not out:
+            return
+
+        img = render_heatmap(actions, duration, chapters=chapters)
+        if not img.save(out, "PNG"):
+            QMessageBox.critical(self, "Export Heatmap", f"Failed to write image:\n{out}")
+            return
+        log.info("Exported heatmap to %s", out)
 
     # ----------------------------------------------------------------- slots
 

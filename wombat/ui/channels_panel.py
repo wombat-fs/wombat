@@ -28,7 +28,12 @@ if TYPE_CHECKING:
     from wombat.app.project import Project
     from wombat.domain.channel import BlendMode
 
-_PRESET_NAMES = ["orig", "alpha", "beta", "volume", "frequency", "pulse-width", "pulse-rise"]
+# Channel presets — names match funscript-tools' output axes so its event YAMLs and
+# generated files map onto Wombat channels directly (underscores, not hyphens).
+_PRESET_NAMES = [
+    "orig", "alpha", "beta", "volume",
+    "frequency", "pulse_frequency", "pulse_width", "pulse_rise_time",
+]
 
 _ACTIVE_CH_COLOR = QColor("#00a8e8")
 _INACTIVE_COLOR = QColor("#aaaaaa")

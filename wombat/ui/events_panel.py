@@ -36,6 +36,7 @@ from wombat.app.editor import EditorController
 from wombat.domain.events.apply import translate_event
 from wombat.domain.events.model import EventLibrary
 from wombat.domain.events.yaml_loader import load_event_library
+from wombat.ui.time_spinbox import TimecodeSpinBox
 
 log = logging.getLogger(__name__)
 
@@ -98,8 +99,8 @@ class EventsPanel(QWidget):
         slay = QVBoxLayout(settings_box)
 
         start_row = QHBoxLayout()
-        start_row.addWidget(QLabel("Start time (s):"))
-        self._start_spin = QDoubleSpinBox()
+        start_row.addWidget(QLabel("Start time:"))
+        self._start_spin = TimecodeSpinBox()
         self._start_spin.setRange(0.0, 86400.0)
         self._start_spin.setDecimals(3)
         self._start_spin.setSingleStep(0.5)

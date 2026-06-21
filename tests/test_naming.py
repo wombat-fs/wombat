@@ -23,7 +23,7 @@ def test_main_channel_names_produce_no_suffix():
 def test_regular_channel_gets_suffix():
     assert channel_filename("clip", "alpha") == "clip.alpha.funscript"
     assert channel_filename("clip", "volume") == "clip.volume.funscript"
-    assert channel_filename("clip", "pulse-width") == "clip.pulse-width.funscript"
+    assert channel_filename("clip", "pulse_width") == "clip.pulse_width.funscript"
 
 
 def test_channel_filename_base_with_dots():
@@ -39,7 +39,7 @@ def test_parse_main_channel():
 def test_parse_regular_channel():
     assert parse_channel_name("clip.alpha.funscript", "clip") == "alpha"
     assert parse_channel_name("clip.volume.funscript", "clip") == "volume"
-    assert parse_channel_name("clip.pulse-width.funscript", "clip") == "pulse-width"
+    assert parse_channel_name("clip.pulse_width.funscript", "clip") == "pulse_width"
 
 
 def test_parse_wrong_base_returns_none():
@@ -60,7 +60,7 @@ def test_parse_double_dot_middle_returns_none():
 # ------------------------------------------------------------------ roundtrip
 
 @pytest.mark.parametrize(
-    "name", ["alpha", "beta", "volume", "frequency", "pulse-width", "pulse-rise"]
+    "name", ["alpha", "beta", "volume", "frequency", "pulse_frequency", "pulse_width", "pulse_rise_time"]
 )
 def test_roundtrip(name: str) -> None:
     fn = channel_filename("clip", name)

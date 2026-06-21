@@ -22,12 +22,12 @@ from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
 log = logging.getLogger(__name__)
 
 # Axis names used in funscript-tools YAMLs that differ from Wombat's channel presets.
-# Looked up before falling back to "no such channel" — first match wins.
+# Channel presets now match funscript-tools' axis names directly (alpha, beta, volume,
+# frequency, pulse_frequency, pulse_width, pulse_rise_time), so only genuine variants
+# need aliasing. Looked up before falling back to "no such channel" — first match wins.
 _AXIS_ALIASES: dict[str, str] = {
-    "pulse_frequency": "frequency",
-    "pulse_width":     "pulse-width",
-    "pulse_rise":      "pulse-rise",
-    "volume-prostate": "volume",   # secondary device axis; fold into regular volume
+    "volume-prostate": "volume",        # secondary prostate axis; fold into regular volume
+    "pulse_rise":      "pulse_rise_time",  # tolerate the short form for the rise-time axis
 }
 
 if __debug__:
@@ -56,6 +56,7 @@ class EditorController(QObject):
         self._active_idx: int = 0               # index into project.channels
         self._active_layer_indices: dict[int, int] = {}   # ch_idx → layer_idx
         self._selections: dict[tuple[int, int], frozenset[float]] = {}  # (ch,layer) → sel
+        self._selection_start: float | None = None   # mark for set-start/set-end range select
         self._clipboard: list[Action] = []
         self._snap_to_frame: bool = False
         self._snap_to_beats: bool = False
@@ -66,11 +67,17 @@ class EditorController(QObject):
 
     # ----------------------------------------------------------------- project
 
+    @property
+    def project(self) -> Project:
+        """The current project. Read live so consumers survive a project swap."""
+        return self._project
+
     def set_project(self, project: Project) -> None:
         self._project = project
         self._active_idx = 0
         self._active_layer_indices = {}
         self._selections = {}
+        self._selection_start = None
         self._clipboard = []
         self._pre_move_snapshot = ActionList()
         self._pre_move_selection = frozenset()
@@ -173,13 +180,29 @@ class EditorController(QObject):
 
     # ----------------------------------------------------------------- single edits
 
+    def _min_gap(self) -> float:
+        """Minimum spacing between two actions: half a video frame, or a small
+        floor (~5 ms, below funscript ms resolution) when no video is loaded."""
+        ft = self._player.frame_time
+        return ft / 2.0 if ft > 0 else 0.005
+
+    def _remove_near(self, layer: ActionList, at: float, gap: float) -> None:
+        """Delete any existing actions within `gap` of `at` (an exact match is left
+        for add() to overwrite). Prevents virtually-coincident duplicate actions."""
+        lo, hi = layer.index_range(at - gap, at + gap)
+        doomed = [layer[i].at for i in range(lo, hi) if layer[i].at != at]
+        for t in doomed:
+            layer.remove_at(t)
+
     def add_action(self, at: float, pos: int) -> None:
         if not self.has_active_channel:
             return
         at = self._snap(at)
         at = max(0.0, at)
         self._undo.snapshot("Add action", self._targets(), self.selection)
-        self._layer().add(Action(at, pos))
+        layer = self._layer()
+        self._remove_near(layer, at, self._min_gap())
+        layer.add(Action(at, pos))
         self.active_channel._invalidate_cache()
         self._emit_actions()
 
@@ -213,6 +236,34 @@ class EditorController(QObject):
         if layer:
             nearest = min((a.at for a in layer), key=lambda t: abs(t - ref_t))
         self._set_selection(frozenset({nearest}) if nearest is not None else frozenset())
+        self.active_channel._invalidate_cache()
+        self._emit_actions()
+        self.selection_changed.emit()
+
+    def isolate_action(self) -> None:
+        """Remove the immediate neighbours of the action closest to the playhead.
+
+        Mirrors OFS's Isolate: keeps the closest action and deletes the points on
+        either side of it, so a single peak/valley can be reshaped in isolation.
+        """
+        if not self.has_active_channel:
+            return
+        layer = self._layer()
+        closest = layer.closest(self._player.logical_time)
+        if closest is None:
+            return
+        prev = layer.before(closest.at)
+        nxt = layer.next_after(closest.at)
+        if prev is None and nxt is None:
+            return
+        self._undo.snapshot("Isolate action", self._targets(), self.selection)
+        for neighbour in (prev, nxt):
+            if neighbour is not None:
+                try:
+                    layer.remove_at(neighbour.at)
+                except ValueError:
+                    pass
+        self._set_selection(frozenset({closest.at}))
         self.active_channel._invalidate_cache()
         self._emit_actions()
         self.selection_changed.emit()
@@ -324,10 +375,39 @@ class EditorController(QObject):
         self.selection_changed.emit()
 
     def end_move(self) -> None:
+        # Collapse only at commit: mid-drag the layer is rebuilt from the snapshot
+        # each frame, so removing a stationary neighbour earlier would destroy it
+        # permanently when the dragged action moves on. The dragged (selected)
+        # actions win over the stationary ones they land on.
+        if self.has_active_channel and self._pre_move_selection:
+            self._collapse_near_selection()
         self._undo.commit()
         self._pre_move_snapshot = ActionList()
         self._pre_move_selection = frozenset()
         self.history_changed.emit()
+
+    def _collapse_near_selection(self) -> None:
+        """Remove unselected actions sitting within a min-gap of any selected action."""
+        ch = self.active_channel
+        layer = ch.layers[self.active_layer_index].actions
+        sel = self.selection
+        gap = self._min_gap()
+        doomed: set[float] = set()
+        for s_at in sel:
+            lo, hi = layer.index_range(s_at - gap, s_at + gap)
+            for i in range(lo, hi):
+                a = layer[i]
+                if a.at not in sel:
+                    doomed.add(a.at)
+        if not doomed:
+            return
+        for t in doomed:
+            try:
+                layer.remove_at(t)
+            except ValueError:
+                pass
+        ch._invalidate_cache()
+        self.actions_changed.emit()
 
     def cancel_move(self) -> None:
         self._undo.cancel()
@@ -389,6 +469,37 @@ class EditorController(QObject):
             return
         result = fn(self._layer())
         self._set_selection(frozenset(a.at for a in result))
+        self.selection_changed.emit()
+
+    # ----------------------------------------------------- playhead-relative select
+
+    def select_left_of_playhead(self, additive: bool = False) -> None:
+        """Select every action at or before the playhead."""
+        self._select_time_span(0.0, self._player.logical_time, additive)
+
+    def select_right_of_playhead(self, additive: bool = False) -> None:
+        """Select every action at or after the playhead."""
+        self._select_time_span(self._player.logical_time, self._player.duration, additive)
+
+    def _select_time_span(self, t0: float, t1: float, additive: bool) -> None:
+        if not self.has_active_channel:
+            return
+        ats = frozenset(a.at for a in self._layer() if t0 <= a.at <= t1)
+        self._set_selection((self.selection | ats) if additive else ats)
+        self.selection_changed.emit()
+
+    def set_selection_start(self) -> None:
+        """Mark the playhead as the start of a range; pair with set_selection_end()."""
+        self._selection_start = self._player.logical_time
+
+    def set_selection_end(self) -> None:
+        """Select all actions between the marked start (set_selection_start) and the playhead."""
+        if self._selection_start is None or not self.has_active_channel:
+            return
+        lo, hi = sorted((self._selection_start, self._player.logical_time))
+        ats = frozenset(a.at for a in self._layer() if lo <= a.at <= hi)
+        self._set_selection(ats)
+        self._selection_start = None
         self.selection_changed.emit()
 
     # ----------------------------------------------------------------- transforms
@@ -959,6 +1070,108 @@ class EditorController(QObject):
         self._undo.cancel()
         self.actions_changed.emit()
         self.history_changed.emit()
+
+    # ----------------------------------------------------------------- plugin host ops
+
+    def _find_layer(self, layer: Layer) -> tuple[Channel, int] | None:
+        """Locate a Layer object in the project by identity → (channel, index)."""
+        for ch in self._project.channels:
+            for i, lay in enumerate(ch.layers):
+                if lay is layer:
+                    return ch, i
+        return None
+
+    @property
+    def min_action_gap(self) -> float:
+        """Minimum spacing between two actions (half a frame, or ~5 ms floor).
+
+        Exposed so plugin edits can de-duplicate generated actions the same way
+        interactive edits do.
+        """
+        return self._min_gap()
+
+    def create_layer(
+        self,
+        *,
+        name: str = "plugin",
+        channel: Channel | None = None,
+        blend: BlendMode = BlendMode.OVERRIDE,
+        span: tuple[float, float] | None = None,
+        actions: ActionList | None = None,
+        plugin_id: str | None = None,
+        plugin_params: dict | None = None,
+    ) -> Layer | None:
+        """Create a new top-of-stack layer for generated content and return it.
+
+        Unlike ``add_layer`` (which inserts an empty layer at the active index for
+        interactive use), this appends on top, accepts initial actions, and stamps
+        plugin provenance so the layer can later be regenerated. One undo step.
+        """
+        ch = channel if channel is not None else (self.active_channel if self.has_active_channel else None)
+        if ch is None:
+            return None
+        ch_idx = self._channel_index(ch)
+        ali = self._active_layer_indices.get(ch_idx, 0) if ch_idx is not None else 0
+        self._undo.snapshot_structural("Create layer", ch, ali, self.selection)
+        layer = Layer(
+            actions=actions if actions is not None else ActionList(),
+            name=name,
+            blend=blend,
+            span=span,
+            plugin_id=plugin_id,
+            plugin_params=dict(plugin_params or {}),
+        )
+        ch.layers.append(layer)
+        ch._invalidate_cache()
+        self._emit_structure()
+        return layer
+
+    def flatten_layer(self, layer: Layer) -> None:
+        """Bake ``layer`` and every layer beneath it into a single base layer,
+        preserving the layers above it. One undo step.
+
+        Well-defined 'commit' for a generated preview layer: the composite of
+        layers[0..k] (with their blend/span/fade envelopes) becomes the new base,
+        and layers above k keep stacking on top exactly as before.
+        """
+        found = self._find_layer(layer)
+        if found is None:
+            return
+        from wombat.domain.synthesis import synthesize
+        ch, k = found
+        baked = synthesize(ch.layers[: k + 1])
+        ch_idx = self._channel_index(ch)
+        ali = self._active_layer_indices.get(ch_idx, 0) if ch_idx is not None else 0
+        self._undo.snapshot_structural("Flatten layer", ch, ali, self.selection)
+        above = ch.layers[k + 1 :]
+        base = Layer(actions=baked, name=ch.layers[0].name)
+        ch.layers = [base] + above
+        if ch_idx is not None:
+            self._active_layer_indices[ch_idx] = min(ali, len(ch.layers) - 1)
+        ch._invalidate_cache()
+        self._emit_structure()
+
+    def plugin_edit_begin(self, layer: Layer, label: str) -> bool:
+        """Open a one-undo-step edit of ``layer`` for plugin code.
+
+        Returns False if the layer is no longer in the project (detached), in
+        which case the caller should treat the edit session as a no-op.
+        """
+        found = self._find_layer(layer)
+        if found is None:
+            return False
+        ch, i = found
+        self._undo.snapshot(label, [(ch, i)], self.selection)
+        return True
+
+    def plugin_edit_end(self, layer: Layer) -> None:
+        """Close a plugin edit: invalidate cache and emit a single repaint signal."""
+        found = self._find_layer(layer)
+        if found is None:
+            return
+        ch, _ = found
+        ch._invalidate_cache()
+        self._emit_actions()
 
     # ----------------------------------------------------------------- history
 

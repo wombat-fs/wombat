@@ -50,6 +50,7 @@ from wombat.domain.snippets.rhythms import (
     Subdivided,
     Swing,
 )
+from wombat.ui.time_spinbox import TimecodeSpinBox
 
 log = logging.getLogger(__name__)
 
@@ -271,12 +272,11 @@ class SnippetPanel(QWidget):
         span_layout = QFormLayout(span_box)
         span_layout.setSpacing(4)
 
-        self._span_start = QDoubleSpinBox()
+        self._span_start = TimecodeSpinBox()
         self._span_start.setRange(0.0, 99999.0)
         self._span_start.setDecimals(3)
         self._span_start.setSingleStep(0.1)
         self._span_start.setValue(0.0)
-        self._span_start.setSuffix(" s")
         self._span_start.valueChanged.connect(self._schedule_preview)
         span_layout.addRow("Start:", self._span_start)
 

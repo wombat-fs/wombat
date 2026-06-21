@@ -77,6 +77,20 @@ class AppSettings:
     def save_dark_theme(self, v: bool) -> None:
         self._qs.setValue("prefs/darkTheme", v)
 
+    # ----------------------------------------------------------------- plugins
+
+    def load_enabled_plugins(self) -> list[str]:
+        """Plugin ids the user had enabled last session."""
+        v = self._qs.value("plugins/enabled", [])
+        if isinstance(v, list):
+            return [str(x) for x in v]
+        if isinstance(v, str) and v:
+            return [v]   # QSettings collapses a 1-element list to a scalar on some backends
+        return []
+
+    def save_enabled_plugins(self, ids: list[str]) -> None:
+        self._qs.setValue("plugins/enabled", list(ids))
+
     def get_synthesis_params(self):
         """Return a SynthesisParams built from stored preferences."""
         from wombat.domain.synthesis import SynthesisParams

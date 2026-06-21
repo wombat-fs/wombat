@@ -19,3 +19,7 @@ See assets folder for Claude design work on a logo. These should also be used fo
 ## Documentation
 
 Set of md files describing how to work with Wombat: Installation instruction, Getting started guide, as well as more in-depth technical docs, including instructions on how to write a plugin.
+
+**Status:** the user guide is written — see [`user/`](user/) (quick-start + advanced
+feature guides), linked from the top-level README. Still outstanding: the
+**plugin-authoring** doc, which waits on the Phase-9 plugin API being built.

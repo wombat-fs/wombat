@@ -1,0 +1,8 @@
+[plugin]
+name = "Invert Layer"
+id = "invert_layer"
+version = "0.1.0"
+entry = "invert_layer:InvertLayerPlugin"
+api = "1"
+capabilities = ["edit_actions"]
+description = "Flip every action's position (100 - pos) on the active layer."

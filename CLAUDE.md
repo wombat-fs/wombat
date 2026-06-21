@@ -45,7 +45,7 @@ Funscripts are JSON files that synchronize haptic device positions with video pl
 
 ### Channels and Layers
 
-Each project links multiple funscript *channels* to a single video source. Typical channels: `orig`, `alpha`, `beta`, `volume`, `frequency`, `pulse-width`, `pulse-rise`. Each channel has a base funscript plus optional layers. Layers contain action snippets that override lower levels. Wombat synthesizes the layer stack with configurable smooth fade-in/fade-out transitions.
+Each project links multiple funscript *channels* to a single video source. Typical channels (names match funscript-tools' axes): `orig`, `alpha`, `beta`, `volume`, `frequency`, `pulse_frequency`, `pulse_width`, `pulse_rise_time`. Each channel has a base funscript plus optional layers. Layers contain action snippets that override lower levels. Wombat synthesizes the layer stack with configurable smooth fade-in/fade-out transitions.
 
 ### Snippet Library
 

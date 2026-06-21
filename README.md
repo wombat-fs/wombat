@@ -1,5 +1,9 @@
 Wombat (tentative name) - Open source cross-platform funscript authoring and editing tool
 
+> **Using Wombat?** See the **[User Guide](docs/user/README.md)** — start with the
+> [Quick Start](docs/user/quick-start.md), then the advanced features (layers,
+> snippets, events, beats). The rest of this file covers development setup.
+
 # Development Setup
 
 ## Prerequisites: libmpv
@@ -113,7 +117,7 @@ Wombat.
 # Capabilities
 
 Wombat should be able to edit/create several funscripts connected to the same
-video source, each called a *channel'. Typical channel names: 'orig', 'alpha', 'beta', 'volume', 'frequence', 'pulse-width', 'pulse-rise'.
+video source, each called a *channel'. Typical channel names (matching funscript-tools' axes): 'orig', 'alpha', 'beta', 'volume', 'frequency', 'pulse_frequency', 'pulse_width', 'pulse_rise_time'.
 
 I want each channel to be editable in a manner that resembles typical video
 editing software: For each channel, we should have a base funscript actions

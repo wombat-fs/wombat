@@ -430,6 +430,23 @@ class TestEditorApplyEventLayers:
         editor.apply_event_layers([])
         assert not undo.can_undo
 
+    def test_pulse_frequency_is_distinct_from_frequency(self) -> None:
+        # Regression: pulse_frequency used to be aliased onto the frequency channel.
+        # With funscript-tools-aligned presets it is its own channel and must not bleed.
+        editor, proj, undo = self._setup_editor(["frequency", "pulse_frequency"])
+        from wombat.domain.action import ActionList
+        from wombat.domain.channel import BlendMode, Layer
+
+        layer = Layer(actions=ActionList(), name="ev:pf", blend=BlendMode.ADDITIVE,
+                      span=(0.0, 5.0))
+        editor.apply_event_layers([("pulse_frequency", layer)])
+
+        # The layer lands on pulse_frequency, leaving frequency untouched.
+        freq = next(c for c in proj.channels if c.name == "frequency")
+        pulse = next(c for c in proj.channels if c.name == "pulse_frequency")
+        assert len(freq.layers) == 1
+        assert len(pulse.layers) == 2
+
 
 # ===================================================================== WaveformSnippet duty_cycle
 

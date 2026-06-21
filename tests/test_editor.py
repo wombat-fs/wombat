@@ -377,3 +377,169 @@ def test_no_active_channel_is_noop():
     ed.add_action(1.0, 50)
     ed.remove_selection()
     assert not ed.can_undo
+
+
+# ------------------------------------------------------------------ playhead-relative select
+
+def test_select_left_of_playhead():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0), (4.0, 100))
+    ed._player.logical_time = 2.5
+    ed.select_left_of_playhead()
+    assert ed.selection == frozenset({1.0, 2.0})
+
+
+def test_select_right_of_playhead():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0), (4.0, 100))
+    ed._player.logical_time = 2.5
+    ed._player.duration = 10.0
+    ed.select_right_of_playhead()
+    assert ed.selection == frozenset({3.0, 4.0})
+
+
+def test_select_left_includes_action_at_playhead():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0))
+    ed._player.logical_time = 2.0
+    ed.select_left_of_playhead()
+    assert ed.selection == frozenset({1.0, 2.0})
+
+
+def test_select_left_additive_unions():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0), (4.0, 100))
+    ed._player.logical_time = 1.5
+    ed.select_left_of_playhead()           # {1.0}
+    ed._player.logical_time = 3.5
+    ed._player.duration = 10.0
+    ed.select_right_of_playhead(additive=True)  # {4.0} ∪ existing
+    assert ed.selection == frozenset({1.0, 4.0})
+
+
+# ------------------------------------------------------------------ set selection start/end
+
+def test_selection_start_end_selects_range():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0), (4.0, 100))
+    ed._player.logical_time = 1.5
+    ed.set_selection_start()
+    ed._player.logical_time = 3.5
+    ed.set_selection_end()
+    assert ed.selection == frozenset({2.0, 3.0})
+
+
+def test_selection_end_handles_reversed_order():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0))
+    ed._player.logical_time = 3.5   # mark "start" after the eventual end
+    ed.set_selection_start()
+    ed._player.logical_time = 0.5
+    ed.set_selection_end()
+    assert ed.selection == frozenset({1.0, 2.0, 3.0})
+
+
+def test_selection_end_without_start_is_noop():
+    ed, ch = _editor((1.0, 0), (2.0, 100))
+    ed._player.logical_time = 1.5
+    ed.set_selection_end()
+    assert ed.selection == frozenset()
+
+
+# ------------------------------------------------------------------ isolate
+
+def test_isolate_removes_neighbours():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0), (4.0, 100), (5.0, 0))
+    ed._player.logical_time = 3.1   # closest is 3.0
+    ed.isolate_action()
+    ats = {a.at for a in ch.layers[0].actions}
+    assert ats == {1.0, 3.0, 5.0}
+    assert ed.selection == frozenset({3.0})
+
+
+def test_isolate_at_edge_removes_single_neighbour():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0))
+    ed._player.logical_time = 0.9   # closest is 1.0, no previous
+    ed.isolate_action()
+    ats = {a.at for a in ch.layers[0].actions}
+    assert ats == {1.0, 3.0}
+
+
+def test_isolate_creates_undo_step():
+    ed, ch = _editor((1.0, 0), (2.0, 100), (3.0, 0))
+    ed._player.logical_time = 2.0
+    ed.isolate_action()
+    assert ed.can_undo
+
+
+def test_isolate_single_action_is_noop():
+    ed, ch = _editor((2.0, 100))
+    ed._player.logical_time = 2.0
+    ed.isolate_action()
+    assert len(ch.layers[0].actions) == 1
+    assert not ed.can_undo
+
+
+# ------------------------------------------------------------------ min-gap dedup (add)
+
+def test_add_replaces_near_duplicate():
+    # fps=30 → frame 33ms, half-frame gap ≈ 16.7ms
+    ed, ch = _editor((1.0, 50), fps=30.0)
+    ed.add_action(1.005, 80)   # 5 ms away, inside the gap
+    al = ch.layers[0].actions
+    assert len(al) == 1
+    assert al[0].at == pytest.approx(1.005)
+    assert al[0].pos == 80
+
+
+def test_add_keeps_distinct_action():
+    ed, ch = _editor((1.0, 50), fps=30.0)
+    ed.add_action(1.05, 80)    # 50 ms away, beyond the gap
+    assert len(ch.layers[0].actions) == 2
+
+
+def test_add_gap_floor_without_video():
+    ed, ch = _editor((1.0, 50), fps=0.0)   # no fps → 5 ms floor
+    ed.add_action(1.003, 80)   # 3 ms away, inside the floor
+    assert len(ch.layers[0].actions) == 1
+
+
+def test_add_removes_neighbours_on_both_sides():
+    ed, ch = _editor((1.0, 0), (1.004, 100), (1.008, 0), fps=0.0)  # 5 ms floor
+    ed.add_action(1.004, 50)   # exact match in the middle of a tight cluster
+    al = ch.layers[0].actions
+    assert len(al) == 1
+    assert al[0] == Action(1.004, 50)
+
+
+# ------------------------------------------------------------------ min-gap dedup (drag)
+
+def test_drag_collapses_onto_neighbor():
+    ed, ch = _editor((1.0, 0), (2.0, 100), fps=30.0)
+    ed.select(1.0)
+    ed.begin_move()
+    ed.move_selection(0.995, 0)   # 1.0 → 1.995, 5 ms from the stationary 2.0
+    # mid-drag the stationary neighbour must survive (snapshot rebuild each frame)
+    assert 2.0 in {a.at for a in ch.layers[0].actions}
+    ed.end_move()
+    al = ch.layers[0].actions
+    assert len(al) == 1
+    assert al[0].at == pytest.approx(1.995)
+    assert al[0].pos == 0          # dragged action wins over the stationary one
+
+
+def test_drag_across_neighbor_preserves_it():
+    ed, ch = _editor((1.0, 0), (2.0, 100), fps=30.0)
+    ed.select(1.0)
+    ed.begin_move()
+    ed.move_selection(1.0, 0)      # transiently lands exactly on 2.0
+    ed.move_selection(2.5, 0)      # 1.0 → 3.5, well past 2.0
+    ed.end_move()
+    ats = sorted(a.at for a in ch.layers[0].actions)
+    assert ats == [pytest.approx(2.0), pytest.approx(3.5)]
+
+
+def test_drag_collapse_is_undoable():
+    ed, ch = _editor((1.0, 0), (2.0, 100), fps=30.0)
+    ed.select(1.0)
+    ed.begin_move()
+    ed.move_selection(0.995, 0)
+    ed.end_move()
+    assert len(ch.layers[0].actions) == 1
+    ed.undo()
+    ats = sorted(a.at for a in ch.layers[0].actions)
+    assert ats == [pytest.approx(1.0), pytest.approx(2.0)]
