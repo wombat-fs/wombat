@@ -620,6 +620,12 @@ class MainWindow(QMainWindow):
         geom = self._settings.load_geometry()
         if geom:
             self.restoreGeometry(geom)
+        else:
+            # First run (no saved geometry): open maximized — most users want
+            # the full editor surface. Set the window state rather than calling
+            # showMaximized() so the pending show() in bootstrap honours it.
+            # Once the user resizes/moves, saved geometry takes over on close.
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
         state = self._settings.load_dock_state()
         if state:
             self.restoreState(state)
