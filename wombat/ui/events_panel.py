@@ -40,10 +40,13 @@ from wombat.ui.time_spinbox import TimecodeSpinBox
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_YAML_PATH = str(
-    Path(__file__).parent.parent.parent
-    / "funscript-tools" / "config.event_definitions.yml"
-)
+# Wombat loads a bundled default event library from here on panel open if the
+# file is present. It is intentionally absent for now: the funscript-tools event
+# definitions we'd like to ship are unlicensed upstream, so we can't redistribute
+# them yet (see wombat/resources/README.md). Package-relative so it also resolves
+# inside a frozen/standalone build.
+_DEFAULT_YAML_DIR = Path(__file__).resolve().parent.parent / "resources"
+_DEFAULT_YAML_PATH = str(_DEFAULT_YAML_DIR / "config.event_definitions.yml")
 
 
 class EventsPanel(QWidget):
@@ -221,8 +224,9 @@ class EventsPanel(QWidget):
 
     @Slot()
     def _on_load(self) -> None:
+        start_dir = str(_DEFAULT_YAML_DIR) if _DEFAULT_YAML_DIR.exists() else ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Load event definitions", _DEFAULT_YAML_PATH,
+            self, "Load event definitions", start_dir,
             "YAML files (*.yml *.yaml);;All files (*)"
         )
         if path:
