@@ -50,6 +50,6 @@ htmlcov/
 memory/
 # Local sample media / scratch projects — not distributed (kept out of the
 # public repo; large media bloats history)
-sample-2.mp4
+*.mp4
 sample-2.funscript
 sample.wombat
