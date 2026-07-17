@@ -19,7 +19,8 @@ env/
 
 # uv
 .uv/
-uv.lock
+# uv.lock is committed: Wombat is a distributed app, so pinned, reproducible
+# dependency resolution matters (and it lets CI cache deps).
 
 # pytest / coverage
 .pytest_cache/
