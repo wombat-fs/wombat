@@ -49,13 +49,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # TODO: pin a specific libmpv build. A common source is the shinchiro
-          # mpv/libmpv releases (SourceForge). Download the dev/SDK zip, extract
-          # libmpv-2.dll, and set WOMBAT_LIBMPV to its absolute path, e.g.:
-          #   Invoke-WebRequest <url-to-libmpv.7z> -OutFile libmpv.7z
-          #   7z x libmpv.7z libmpv-2.dll
-          # echo "WOMBAT_LIBMPV=$(Resolve-Path libmpv-2.dll)" >> $env:GITHUB_ENV
-          Write-Error "Set WOMBAT_LIBMPV for Windows (see TODO in this step)."
+          # Pinned libmpv dev build from zhongfly/mpv-winbuild (GitHub releases,
+          # direct asset URLs — no SourceForge redirects). The mpv-dev package
+          # ships libmpv-2.dll at the archive root. Bump the tag/filename to
+          # update; keep both in sync.
+          $url = "https://github.com/zhongfly/mpv-winbuild/releases/download/2026-07-17-94335ab87a/mpv-dev-x86_64-20260717-git-94335ab87a.7z"
+          Invoke-WebRequest $url -OutFile libmpv.7z
+          # 7z is preinstalled on windows-latest; -e flattens paths, -r recurses.
+          7z e libmpv.7z libmpv-2.dll -r -y
+          if (-not (Test-Path libmpv-2.dll)) { Write-Error "libmpv-2.dll not found in archive" }
+          echo "WOMBAT_LIBMPV=$(Resolve-Path libmpv-2.dll)" >> $env:GITHUB_ENV
 
       - name: Build with PyInstaller
         env:
