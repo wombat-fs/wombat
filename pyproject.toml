@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "wombat"
 version = "0.1.0"
 description = "Cross-platform funscript authoring and editing tool"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "PySide6",
