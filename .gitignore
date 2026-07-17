@@ -48,3 +48,8 @@ htmlcov/
 # Claude Code local/per-developer state (CLAUDE.md is intentionally tracked)
 .claude/
 memory/
+# Local sample media / scratch projects — not distributed (kept out of the
+# public repo; large media bloats history)
+sample-2.mp4
+sample-2.funscript
+sample.wombat
