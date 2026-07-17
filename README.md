@@ -30,7 +30,8 @@ own, or the output of another tool) and refine it, or build one from scratch.
 - **Events** — load `event_definitions.yml` files and apply multi-channel events
   (modulation, fades, set-value) across axes at once.
 - **Audio & beats** — a waveform underlay, beat detection, and snap-to-beat when
-  placing and moving actions.
+  placing and moving actions. Detection is optional and needs an external tool
+  ([setup](docs/user/audio-and-beats.md#setting-up-beat-detection)).
 - **Chapters, metadata, and export** — chapter markers, per-channel metadata,
   funscript export, and heatmap images.
 - **Python plugin API** — extend Wombat with native Python plugins.
