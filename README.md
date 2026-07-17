@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wombat-lockup-dark-800.png">
+    <img src="assets/wombat-lockup-800.png" alt="Wombat" width="400">
+  </picture>
+</p>
+
 # Wombat
 
 **A cross-platform funscript authoring and editing tool.**
