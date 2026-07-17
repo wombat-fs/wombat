@@ -1,0 +1,102 @@
+name: Build release apps
+
+# Cuts standalone macOS (Apple Silicon) and Windows (x86-64) builds.
+# Push a tag like `v0.1.0` to build and attach them to a GitHub Release,
+# or run manually from the Actions tab to test the pipeline without tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # required to create/update the Release on a tag build
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14         # Apple Silicon (arm64)
+            artifact: Wombat-macos-arm64
+          - os: windows-latest   # x86-64
+            artifact: Wombat-windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install project and PyInstaller
+        run: |
+          uv sync --extra dev
+          uv pip install pyinstaller
+
+      # --- libmpv (macOS): Homebrew, plus dylibbundler for the dep graph ------
+      - name: Install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv dylibbundler
+          echo "WOMBAT_LIBMPV=$(brew --prefix mpv)/lib/libmpv.dylib" >> "$GITHUB_ENV"
+
+      # --- libmpv (Windows): drop a prebuilt libmpv-2.dll next to the build ---
+      - name: Install libmpv (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # TODO: pin a specific libmpv build. A common source is the shinchiro
+          # mpv/libmpv releases (SourceForge). Download the dev/SDK zip, extract
+          # libmpv-2.dll, and set WOMBAT_LIBMPV to its absolute path, e.g.:
+          #   Invoke-WebRequest <url-to-libmpv.7z> -OutFile libmpv.7z
+          #   7z x libmpv.7z libmpv-2.dll
+          # echo "WOMBAT_LIBMPV=$(Resolve-Path libmpv-2.dll)" >> $env:GITHUB_ENV
+          Write-Error "Set WOMBAT_LIBMPV for Windows (see TODO in this step)."
+
+      - name: Build with PyInstaller
+        env:
+          WOMBAT_VERSION: ${{ github.ref_name }}
+        run: uv run pyinstaller wombat.spec --noconfirm
+
+      # --- macOS: collect libmpv's transitive dylibs into the .app, ad-hoc sign,
+      #     and package a .dmg. The dylibbundler step is the one most likely to
+      #     need tuning against the build log. -------------------------------
+      - name: Bundle dylibs and package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP="dist/Wombat.app"
+          dylibbundler -od -b \
+            -x "$APP/Contents/MacOS/Wombat" \
+            -d "$APP/Contents/Frameworks" \
+            -p "@executable_path/../Frameworks"
+          # Ad-hoc signature so Gatekeeper doesn't kill an unsigned bundle outright.
+          # Not notarized: testers still right-click -> Open the first time.
+          codesign --force --deep --sign - "$APP"
+          hdiutil create -volname Wombat -srcfolder "$APP" -ov -format UDZO \
+            "dist/${{ matrix.artifact }}.dmg"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/Wombat/* -DestinationPath "dist/${{ matrix.artifact }}.zip"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.dmg
+            dist/*.zip
