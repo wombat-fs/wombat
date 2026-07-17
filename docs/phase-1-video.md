@@ -21,7 +21,7 @@ New runtime dep is already present from Phase 0 (`python-mpv`). New package: `pl
 
 ## The `VideoPlayer` interface (the seam — design this carefully)
 
-The rest of Wombat talks to playback **only** through this. Mirror OFS's `OFS_Videoplayer` (`OFS/OFS-lib/videoplayer/OFS_Videoplayer.h`). It owns the `mpv.MPV` instance; `MpvWidget` is handed the handle for rendering.
+The rest of Wombat talks to playback **only** through this. Mirror OFS's `OFS_Videoplayer` (`../wombat-reference/OFS/OFS-lib/videoplayer/OFS_Videoplayer.h`). It owns the `mpv.MPV` instance; `MpvWidget` is handed the handle for rendering.
 
 ```python
 class VideoPlayer(QObject):

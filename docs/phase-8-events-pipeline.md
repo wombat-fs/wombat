@@ -7,10 +7,10 @@ Two independent parts — build in either order:
 - **8b — Derivative pipeline:** generate alpha/beta/volume/frequency/pulse… channels from a base by porting funscript-tools' algorithms.
 
 **Milestones:**
-- *(8a)* load the repo's `funscript-tools/config.event_definitions.yml`, place an event on the timeline, and have it create the right layers on the right channels with correct waveform/fade/blend.
+- *(8a)* load the repo's `../wombat-reference/funscript-tools/config.event_definitions.yml`, place an event on the timeline, and have it create the right layers on the right channels with correct waveform/fade/blend.
 - *(8b)* generate the standard derivative channels from a base channel and have them appear as editable channels in the project.
 
-Reference material (read these — they are the spec): `funscript-tools/FUNDAMENTAL_OPERATIONS.md` (operation semantics), `funscript-tools/config.event_definitions.yml` (event format), `funscript-tools/processor.py` + `funscript-tools/processing/` (algorithm source of truth), `funscript-tools/PYTHON_GUI_APPLICATION_SPECIFICATION.md` (pipeline params).
+Reference material (read these — they are the spec): `../wombat-reference/funscript-tools/FUNDAMENTAL_OPERATIONS.md` (operation semantics), `../wombat-reference/funscript-tools/config.event_definitions.yml` (event format), `../wombat-reference/funscript-tools/processor.py` + `../wombat-reference/funscript-tools/processing/` (algorithm source of truth), `../wombat-reference/funscript-tools/PYTHON_GUI_APPLICATION_SPECIFICATION.md` (pipeline params).
 
 ---
 
@@ -40,7 +40,7 @@ So applying an event is **non-destructive** — it adds layers you can then twea
 | Axis ↔ channel | match event `axis` names to **channel names** (the Phase 5 naming convention) | `volume`, `pulse_frequency`, `alpha`… are already the channel names. Missing channel → warn & skip. |
 | Normalization | apply the YAML `normalization` block (axis max + unit) → 0–1 → 0–100 | Faithful to funscript-tools value semantics. |
 | Pipeline integration | **port the algorithms** into pure numpy (`domain/pipeline/`), one-shot channel generation | Wombat is Python; porting keeps outputs as editable channels and avoids a subprocess + file round-trip. External-subprocess call is an optional fallback. |
-| Pipeline source of truth | `funscript-tools/processing/` + `processor.py` | Port faithfully; don't reinvent the formulas. |
+| Pipeline source of truth | `../wombat-reference/funscript-tools/processing/` + `processor.py` | Port faithfully; don't reinvent the formulas. |
 | Event grouping | *optional/stretch:* tag layers created by one event with a group id | Lets the user remove/move a whole event later. Cheap hook; defer the UI. |
 
 ---
@@ -115,7 +115,7 @@ All insertions go through `EditorController` so the whole event application is *
 
 ## Part 8b — Derivative pipeline
 
-Port funscript-tools' generators so Wombat can build the derivative channel set from a base. **Read `funscript-tools/processing/` and `processor.py` for exact formulas** — port faithfully into pure numpy.
+Port funscript-tools' generators so Wombat can build the derivative channel set from a base. **Read `../wombat-reference/funscript-tools/processing/` and `processor.py` for exact formulas** — port faithfully into pure numpy.
 
 ### Package
 
@@ -183,7 +183,7 @@ tests/
 - [ ] `test_events.py` against the repo `config.event_definitions.yml`
 
 **8b:**
-- [ ] `pipeline/signal_ops.py`, `conversions.py`, `motion_axis.py` — faithful numpy ports of `funscript-tools/processing/`
+- [ ] `pipeline/signal_ops.py`, `conversions.py`, `motion_axis.py` — faithful numpy ports of `../wombat-reference/funscript-tools/processing/`
 - [ ] `pipeline/config.py`, `runner.py` — params + standard derivative generation, one-shot + regenerate
 - [ ] `derivatives_dialog.py` — configure/generate, config save/load
 - [ ] `test_pipeline.py` — golden-file comparison vs funscript-tools

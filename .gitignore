@@ -44,7 +44,6 @@ htmlcov/
 *.swo
 *~
 
-# Reference installations (present in this repo as read-only reference material)
-OFS/
-funscript-tools/
-FunscriptToolbox/
+# Claude Code local/per-developer state (CLAUDE.md is intentionally tracked)
+.claude/
+memory/

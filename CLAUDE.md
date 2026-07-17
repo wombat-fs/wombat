@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Wombat** is a new cross-platform funscript authoring and editing tool being built from scratch. It is not yet implemented — only documentation exists so far. The goal is a viable alternative to OpenFunscripter (OFS) that runs on all major platforms.
+**Wombat** is a cross-platform funscript authoring and editing tool. The core editor is built and covered by tests; work continues in dependency order. The goal is a viable, actively-maintained alternative to OpenFunscripter (OFS) that runs on all major platforms.
 
 See `ROADMAP.md` for the architecture overview, package layout, and the phased build plan. Work proceeds in dependency order; each phase ends with a runnable milestone.
 
@@ -53,7 +53,7 @@ Wombat should offer drum-beat patterns for `at` keys with algorithms for `pos` v
 
 ### Event System
 
-The `config.event_definitions.yml` format from funscript-tools (see `funscript-tools/` reference) defines composite multi-channel events in YAML. Wombat should support loading these YAML files directly. Operations include `apply_modulation` (waveform overlay on an axis), `set_value`, `fade`, etc.
+The `config.event_definitions.yml` format from funscript-tools (see `../wombat-reference/funscript-tools/`) defines composite multi-channel events in YAML. Wombat should support loading these YAML files directly. Operations include `apply_modulation` (waveform overlay on an axis), `set_value`, `fade`, etc.
 
 ### GUI Layout
 
@@ -130,23 +130,23 @@ class MpvWidget(QOpenGLWidget):
 
 ### Mirror OFS's player abstraction
 
-Wrap mpv behind a clean interface like OFS's `OFS_Videoplayer` (see `OFS/OFS-lib/videoplayer/OFS_Videoplayer.h`). The key idea to copy: track a **logical position** (the last time you *requested* via seek) separately from the player's **actual reported position**, so the timeline cursor stays stable while frame-stepping. Expose frame stepping (mpv commands `frame-step` / `frame-back-step`), exact seeking (`seek <t> absolute+exact`), and speed control. Frame-exact stepping is the whole reason libmpv was chosen — make sure it's wired through.
+Wrap mpv behind a clean interface like OFS's `OFS_Videoplayer` (see `../wombat-reference/OFS/OFS-lib/videoplayer/OFS_Videoplayer.h`). The key idea to copy: track a **logical position** (the last time you *requested* via seek) separately from the player's **actual reported position**, so the timeline cursor stays stable while frame-stepping. Expose frame stepping (mpv commands `frame-step` / `frame-back-step`), exact seeking (`seek <t> absolute+exact`), and speed control. Frame-exact stepping is the whole reason libmpv was chosen — make sure it's wired through.
 
 ## Reference Repositories
 
-Both reference repos are **read-only reference material**, not part of Wombat's build.
+These reference repos are **read-only reference material**, not part of Wombat's build and not committed to this repository. They live in a sibling directory `../wombat-reference/` (a peer of the repo root), cloned locally for reference only. Paths below are relative to that directory.
 
-### `OFS/` — OpenFunscripter (C++)
+### `../wombat-reference/OFS/` — OpenFunscripter (C++)
 
-A feature-complete funscript editor, no longer actively maintained. Use as a UX reference for what features and workflows to support. The codebase is cross-platform-capable (it ships Windows binaries and a Linux AppImage; macOS was untested by the author only for lack of hardware, not a technical barrier). See `OFS/CLAUDE.md` for a full architecture breakdown and a prioritized list of ideas to port. Key reference: `OFS/LuaApiReference.md` for scriptable operations.
+A feature-complete funscript editor, no longer actively maintained. Use as a UX reference for what features and workflows to support. The codebase is cross-platform-capable (it ships Windows binaries and a Linux AppImage; macOS was untested by the author only for lack of hardware, not a technical barrier). See `../wombat-reference/OFS/CLAUDE.md` for a full architecture breakdown and a prioritized list of ideas to port. Key reference: `../wombat-reference/OFS/LuaApiReference.md` for scriptable operations.
 
-### `funscript-tools/` — Restim Funscript Processor (Python/Tkinter)
+### `../wombat-reference/funscript-tools/` — Restim Funscript Processor (Python/Tkinter)
 
 A batch-processing tool that generates 10 derivative funscripts from a base one. Key things to reuse or integrate:
 
-- **Processing pipeline** in `funscript-tools/processor.py` — generates alpha/beta/frequency/volume/pulse channels from a main funscript
-- **1D-to-2D conversion** in `funscript-tools/processing/funscript_1d_to_2d.py` — algorithms: Circular, Top-Left-Right, Top-Right-Left, 0-360
-- **Event definitions YAML format** — see `funscript-tools/config.event_definitions.yml` and `funscript-tools/FUNDAMENTAL_OPERATIONS.md` for the full operation spec
+- **Processing pipeline** in `../wombat-reference/funscript-tools/processor.py` — generates alpha/beta/frequency/volume/pulse channels from a main funscript
+- **1D-to-2D conversion** in `../wombat-reference/funscript-tools/processing/funscript_1d_to_2d.py` — algorithms: Circular, Top-Left-Right, Top-Right-Left, 0-360
+- **Event definitions YAML format** — see `../wombat-reference/funscript-tools/config.event_definitions.yml` and `../wombat-reference/funscript-tools/FUNDAMENTAL_OPERATIONS.md` for the full operation spec
 - **Motion Axis Generation** — linear interpolation mapping of main funscript to E1–E4 axes via user-defined control point curves
 
 The funscript-tools tech stack uses Tkinter; Wombat uses PySide6 instead. Algorithms can be ported directly; UI code cannot.

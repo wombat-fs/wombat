@@ -1,6 +1,6 @@
 # Wombat Roadmap
 
-A high-level plan for building Wombat. This is the skeleton — each phase gets fleshed out when we reach it. See `CLAUDE.md` for the tech stack and `OFS/CLAUDE.md` for the architecture ideas being ported from OpenFunscripter.
+A high-level plan for building Wombat. This is the skeleton — each phase gets fleshed out when we reach it. See `CLAUDE.md` for the tech stack and `../wombat-reference/OFS/CLAUDE.md` for the architecture ideas being ported from OpenFunscripter.
 
 ## Guiding principles
 

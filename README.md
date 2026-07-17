@@ -1,84 +1,48 @@
-Wombat (tentative name) - Open source cross-platform funscript authoring and editing tool
+# Wombat
 
-> **Using Wombat?** See the **[User Guide](docs/user/README.md)** — start with the
-> [Quick Start](docs/user/quick-start.md), then the advanced features (layers,
-> snippets, events, beats). The rest of this file covers development setup.
+**A cross-platform funscript authoring and editing tool.**
 
-# Development Setup
+Wombat is a desktop editor for [funscripts](#the-funscript-format) — the JSON
+files that drive haptic devices in sync with a video. It aims to be a viable,
+actively-maintained alternative to [OpenFunscripter (OFS)](https://github.com/OpenFunscripter/OFS)
+that runs on macOS, Linux, and Windows, with a non-destructive **layer** system
+on top of every channel as its defining feature.
 
-## Prerequisites: libmpv
+> **Status:** early but functional. The core editor — video playback, the
+> multi-channel timeline, editing, layers, snippets, events, beat detection, and
+> a Python plugin API — is built and covered by tests. Expect rough edges and
+> changing internals.
 
-`python-mpv` is a ctypes binding — **libmpv must be installed on your system** before running Wombat.
+Wombat is **not** an AI script generator. It's an editor: bring a draft (your
+own, or the output of another tool) and refine it, or build one from scratch.
 
-| Platform | Command |
-|---|---|
-| **macOS (Apple Silicon)** | `brew install mpv` — installs `libmpv.dylib` under `/opt/homebrew/lib` |
-| **Linux (Debian/Ubuntu)** | `sudo apt install libmpv2` (or `libmpv-dev`) |
-| **Windows** | Download `libmpv-2.dll` and place it on the DLL search path (e.g. next to the executable) |
+## Features
 
-> **Troubleshooting (macOS):** If you get an error loading libmpv, ctypes' `find_library('mpv')` sometimes fails to locate the Homebrew dylib. Set the environment variable `MPV_DYLIB_PATH=/opt/homebrew/lib/libmpv.dylib` as a workaround.
+- **Multi-channel projects** — edit several funscripts (`orig`, `alpha`, `beta`,
+  `volume`, `frequency`, pulse axes, …) against a single video.
+- **Non-destructive layers** — stack action snippets that override lower levels,
+  with configurable smooth fade-in/out transitions. Nothing is destroyed; you can
+  re-edit or remove any layer.
+- **Frame-accurate playback** via libmpv, with frame stepping and exact seeking —
+  the whole reason libmpv was chosen over other players.
+- **Snippet library** — drum-beat and waveform pattern generators (alternating,
+  sinusoidal, Euclidean rhythms, ramps) for quickly laying down `pos` values.
+- **Events** — load `event_definitions.yml` files and apply multi-channel events
+  (modulation, fades, set-value) across axes at once.
+- **Audio & beats** — a waveform underlay, beat detection, and snap-to-beat when
+  placing and moving actions.
+- **Chapters, metadata, and export** — chapter markers, per-channel metadata,
+  funscript export, and heatmap images.
+- **Python plugin API** — extend Wombat with native Python plugins.
+- **Keyboard-driven** — most commands have shortcuts, and keybindings are
+  customisable.
 
-## Install and run
+## The funscript format
 
-```bash
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
+A funscript is a JSON file mapping device positions to timestamps:
 
-# Install all dependencies (including dev extras)
-uv sync --extra dev
-
-# Launch the app
-uv run wombat
-
-# Alternatively, without uv:
-pip install -e ".[dev]"
-python -m wombat
-```
-
-## Development
-
-```bash
-# Run tests
-uv run pytest
-
-# Lint and format check
-uv run ruff check .
-uv run ruff format --check .
-
-# Auto-fix formatting
-uv run ruff format .
-
-# Type checking (advisory)
-uv run mypy wombat
-```
-
-# What is a funcscript?
-
-Funscript is a JSON-based file format used to synchronize interactive devices
-for haptic feedback with video playback. It operates on a simple timeline by
-mapping physical device positions to specific timestamps in the video.
-
-## Core JSON Structure
-
-The format uses a few root properties and an array of objects known as
-actions.
-
-* version: Script version (usually "1.0")
-* *inverted: Optional boolean that inverts device positions (100 becomes 0)
-* range: Optional integer (default 0–100) defining the haptic position/intensity span
-* actions: The core array mapping positions over time.
-
-## Action Object Properties
-
-Inside the actions array, each movement is defined by two mandatory properties:
-
-* at: The time elapsed from the start of the script/video, measured in milliseconds (int)
-* pos: The target position/intensity of the device on a scale from 0 to 100% (int)
-
-### Example
-
-```
-json{
+```json
+{
   "version": "1.0",
   "inverted": false,
   "range": 90,
@@ -90,67 +54,69 @@ json{
 }
 ```
 
-# Other availble tools
+- `at` — time from the start, in milliseconds (int)
+- `pos` — device position/intensity, 0–100 (int)
+- `inverted` — optional; flips `pos` values
+- `range` — optional; the position span (default 0–100)
 
-While the underlying funscript is very simple, there is a need for a user
-friendly authoring/editing tool that can run on all major platforms.
+## Installing
 
-The most used tools has probably been OpenFunscripter (OFS), available at
-https://github.com/OpenFunscripter/OFS, but this is Windows only and no longer
-actively maintained. The aim is to make Wombat a viable alternative, but not a
-direct clone of this. A copy of the OFS repo is available in the OFS folder for
-reference.
+### Prerequisite: libmpv
 
-There are other tools, most notably
-https://github.com/ack00gar/FunGen-AI-Powered-Funscript-Generator that uses AI
-models to automatically create a funscript from a video. This is useful and can
-be the starting point for creating a preliminary version of a script that can be
-input into Wombat for refining and editing. AI generation is out of scope for
-Wombat.
+Wombat plays video through `python-mpv`, a ctypes binding — **libmpv must be
+installed on your system first.**
 
-# Technical stack (tentative)
+| Platform | Command |
+|---|---|
+| **macOS (Apple Silicon)** | `brew install mpv` (installs `libmpv.dylib` under `/opt/homebrew/lib`) |
+| **Linux (Debian/Ubuntu)** | `sudo apt install libmpv2` (or `libmpv-dev`) |
+| **Windows** | Download `libmpv-2.dll` and place it on the DLL search path (e.g. next to the executable) |
 
-* Python 3
-* python-mpv (libmpv) for video playback, chosen for frame-accurate seeking/stepping and cross-platform support (documentation at https://github.com/jaseg/python-mpv)
-* PySide6 for the UI (Python Qt wrappers)
+> **macOS troubleshooting:** if you hit an error loading libmpv, ctypes'
+> `find_library('mpv')` sometimes can't locate the Homebrew dylib. Work around it
+> with `export MPV_DYLIB_PATH=/opt/homebrew/lib/libmpv.dylib`.
 
-# Capabilities
+macOS support targets **Apple Silicon** only; Linux and Windows target x86-64.
 
-Wombat should be able to edit/create several funscripts connected to the same
-video source, each called a *channel'. Typical channel names (matching funscript-tools' axes): 'orig', 'alpha', 'beta', 'volume', 'frequency', 'pulse_frequency', 'pulse_width', 'pulse_rise_time'.
+### Run
 
-I want each channel to be editable in a manner that resembles typical video
-editing software: For each channel, we should have a base funscript actions
-at/pos key value pair and it should be possible to add layers to this where a
-layer can contain action snippets that override the data in lower levels.
+```bash
+# Install uv if you don't have it: https://docs.astral.sh/uv/
+uv sync --extra dev
+uv run wombat
 
-Wombat synthesizes the layer stack with (definable smooth transitions when a new
-layer fades in or out).
+# Or without uv:
+pip install -e ".[dev]"
+python -m wombat
+```
 
-We should offer a number of base snippets creating drum-beat patters for the
-'at' keys and give several algorithms for the corrsponding "pos" values. Simple
-examples: pos alternating between two values, or slightly more complex, pos
-alternating between two values added to base signal (sinusoid or similar), but
-there are lot of other interesting patterns that we should offer in form of a
-"snippet library"
+## Documentation
 
-There is a github repo https://github.com/edger477/funscript-tools, available in
-the funscript-tools folder,  that builds a number of funscripts from a base one.
-We should offer that functionality too, either by calling this program
-externally or incorporating the algorithm directly. That tool also has an
-interesting idea of "events" that affect several parallel funscript channels. I
-want Wombat to offer a similar functionality, preferably allowing the yaml-files
-from that repo to be used directly in Wombat.
+New here? Start with the **[User Guide](docs/user/README.md)** — the
+[Quick Start](docs/user/quick-start.md) walks you from opening a video to
+exporting a script, and the advanced pages cover layers, snippets, events, and
+beats.
 
+## Development
 
-# GUI
+```bash
+uv run pytest                  # tests
+uv run ruff check .            # lint
+uv run ruff format --check .   # format check
+uv run mypy wombat             # type checking (advisory)
+```
 
-Similar to OFS.
+The architecture overview and phased build plan live in
+[ROADMAP.md](ROADMAP.md); repo-wide conventions for contributors (and AI
+assistants) are in [CLAUDE.md](CLAUDE.md).
 
-Main widget shows a video source.
+## Contributing
 
-Underneath the channels are visible, drawn as affine graphs with a node at each
-action in the funscript, and a clear visual representation of each layer,
-similar to how it's done in video editing software.
+Issues and pull requests are welcome. If you're planning a larger change, please
+open an issue first so we can talk through the approach.
 
-Most commands should be accessible though keyboard shortcuts.
+## License & donations
+
+Wombat is released under the [MIT License](LICENSE) — free to use, including
+commercially. If Wombat is useful to you in a commercial setting, a donation to
+support ongoing maintenance is appreciated but never required.
