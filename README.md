@@ -115,6 +115,15 @@ assistants) are in [CLAUDE.md](CLAUDE.md).
 Issues and pull requests are welcome. If you're planning a larger change, please
 open an issue first so we can talk through the approach.
 
+## Acknowledgements
+
+Wombat's default event library is
+[funscript-tools](https://github.com/edger477/funscript-tools)'
+`config.event_definitions.yml` by **edger477**, bundled under the MIT License
+(Copyright © 2024 edger477); the license travels with the file in
+[wombat/resources/](wombat/resources/). Wombat also takes UX inspiration from
+[OpenFunscripter](https://github.com/OpenFunscripter/OFS).
+
 ## License & donations
 
 Wombat is released under the [MIT License](LICENSE) — free to use, including

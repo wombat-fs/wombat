@@ -9,8 +9,9 @@ from that ecosystem work directly. The **Events** panel drives this.
 
 ## Loading definitions
 
-1. Click **Load event definitions…** and choose a YAML file — for example
-   funscript-tools' own `config.event_definitions.yml`.
+1. Wombat starts with a **default library** loaded (funscript-tools'
+   `config.event_definitions.yml`, bundled under MIT). To use your own, click
+   **Load event definitions…** and choose a YAML file.
 2. The events in the file are listed, grouped by their headers.
 
 The YAML defines each event as a set of operations on named channels —

@@ -40,11 +40,10 @@ from wombat.ui.time_spinbox import TimecodeSpinBox
 
 log = logging.getLogger(__name__)
 
-# Wombat loads a bundled default event library from here on panel open if the
-# file is present. It is intentionally absent for now: the funscript-tools event
-# definitions we'd like to ship are unlicensed upstream, so we can't redistribute
-# them yet (see wombat/resources/README.md). Package-relative so it also resolves
-# inside a frozen/standalone build.
+# Wombat ships a default event library and loads it on panel open if present.
+# It's funscript-tools' config.event_definitions.yml, bundled under MIT (see
+# wombat/resources/README.md). Package-relative so it also resolves inside a
+# frozen/standalone build.
 _DEFAULT_YAML_DIR = Path(__file__).resolve().parent.parent / "resources"
 _DEFAULT_YAML_PATH = str(_DEFAULT_YAML_DIR / "config.event_definitions.yml")
 
