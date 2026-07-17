@@ -348,7 +348,6 @@ def _channel_to_dict(ch: Channel) -> dict:
 
 
 def _channel_from_dict(d: dict) -> Channel:
-    from wombat.domain.funscript import FunscriptMetadata
     return Channel(
         name=str(d.get("name", "channel")),
         enabled=bool(d.get("enabled", True)),

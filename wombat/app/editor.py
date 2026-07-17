@@ -9,14 +9,13 @@ each combination's previous selection independently.
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 
 from wombat.app.undo import UndoStack
 from wombat.domain.action import Action, ActionList
-import logging
-
 from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
 
 log = logging.getLogger(__name__)
@@ -106,7 +105,7 @@ class EditorController(QObject):
         return idx
 
     @property
-    def active_layer(self) -> "Layer | None":
+    def active_layer(self) -> Layer | None:
         if not self.has_active_channel:
             return None
         ch = self.active_channel
@@ -618,7 +617,9 @@ class EditorController(QObject):
         li = self.active_layer_index if index is None else index
         if not (0 <= li < len(ch.layers)):
             return
-        self._undo.snapshot_structural("Duplicate layer", ch, self.active_layer_index, self.selection)
+        self._undo.snapshot_structural(
+            "Duplicate layer", ch, self.active_layer_index, self.selection
+        )
         dup = copy.deepcopy(ch.layers[li])
         dup.name = dup.name + " copy"
         ch.layers.insert(li + 1, dup)
@@ -751,7 +752,9 @@ class EditorController(QObject):
         ch = self.active_channel
         if not (0 <= index < len(ch.layers)):
             return
-        self._undo.snapshot_structural("Set fade curve", ch, self.active_layer_index, self.selection)
+        self._undo.snapshot_structural(
+            "Set fade curve", ch, self.active_layer_index, self.selection
+        )
         ch.layers[index].fade_curve = curve
         ch._invalidate_cache()
         self._emit_structure()
@@ -871,7 +874,7 @@ class EditorController(QObject):
         snippet: object,
         span: tuple[float, float],
         *,
-        blend: "BlendMode",
+        blend: BlendMode,
         fade_in: float,
         fade_out: float,
     ) -> None:
@@ -889,7 +892,9 @@ class EditorController(QObject):
             fps=fps,
             snap_to_frame=self._snap_to_frame,
         )
-        self._undo.snapshot_structural("Update snippet layer", ch, self.active_layer_index, self.selection)
+        self._undo.snapshot_structural(
+            "Update snippet layer", ch, self.active_layer_index, self.selection
+        )
         layer = ch.layers[layer_index]
         layer.actions = actions
         layer.span = span
@@ -1095,7 +1100,8 @@ class EditorController(QObject):
         self._undo.begin("Record", [(ch, li)], self.selection)
 
     def record_action(self, at: float, pos: int) -> None:
-        """Insert a sampled action without creating a new undo entry (inside a recording gesture)."""
+        """Insert a sampled action without creating a new undo entry (inside a
+        recording gesture)."""
         if not self.has_active_channel:
             return
         at = max(0.0, at)
@@ -1150,7 +1156,9 @@ class EditorController(QObject):
         interactive use), this appends on top, accepts initial actions, and stamps
         plugin provenance so the layer can later be regenerated. One undo step.
         """
-        ch = channel if channel is not None else (self.active_channel if self.has_active_channel else None)
+        ch = channel if channel is not None else (
+            self.active_channel if self.has_active_channel else None
+        )
         if ch is None:
             return None
         ch_idx = self._channel_index(ch)

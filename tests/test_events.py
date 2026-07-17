@@ -154,7 +154,9 @@ class TestYamlLoader:
 # ===================================================================== translate_event
 
 class TestTranslateEvent:
-    def _make_modulation_event(self, mode: str = "additive") -> tuple[EventDefinition, EventLibrary]:
+    def _make_modulation_event(
+        self, mode: str = "additive"
+    ) -> tuple[EventDefinition, EventLibrary]:
         norm = NormalizationConfig(axes={"volume": (1.0, "normalized")})
         step = Step(
             operation="apply_modulation",
@@ -276,7 +278,9 @@ class TestTranslateEvent:
     # --- multi-axis ---
 
     def test_multi_axis_creates_one_layer_per_axis(self) -> None:
-        norm = NormalizationConfig(axes={"volume": (1.0, "normalized"), "volume-prostate": (1.0, "normalized")})
+        norm = NormalizationConfig(
+            axes={"volume": (1.0, "normalized"), "volume-prostate": (1.0, "normalized")}
+        )
         step = Step(
             operation="apply_modulation",
             axes=["volume", "volume-prostate"],
@@ -338,12 +342,12 @@ class TestEditorApplyEventLayers:
 
     def _make_project_with_channels(self, names: list[str]):
         from wombat.app.project import Project
-        from wombat.domain.channel import Channel, Layer
         from wombat.domain.action import ActionList
+        from wombat.domain.channel import Channel, Layer
         proj = Project.new()
         for n in names:
             ch = Channel(name=n, layers=[Layer(actions=ActionList(), name="base")])
-            proj.channels.append(n)  # won't work — need to use proper API
+            proj.channels.append(ch)
         return proj
 
     def _setup_editor(self, channel_names: list[str]):
@@ -401,8 +405,12 @@ class TestEditorApplyEventLayers:
         from wombat.domain.action import ActionList
         from wombat.domain.channel import BlendMode, Layer
 
-        layer_v = Layer(actions=ActionList(), name="ev:v", blend=BlendMode.ADDITIVE, span=(0.0, 5.0))
-        layer_a = Layer(actions=ActionList(), name="ev:a", blend=BlendMode.ADDITIVE, span=(0.0, 5.0))
+        layer_v = Layer(
+            actions=ActionList(), name="ev:v", blend=BlendMode.ADDITIVE, span=(0.0, 5.0)
+        )
+        layer_a = Layer(
+            actions=ActionList(), name="ev:a", blend=BlendMode.ADDITIVE, span=(0.0, 5.0)
+        )
         editor.apply_event_layers([("volume", layer_v), ("alpha", layer_a)])
 
         editor.undo()
@@ -481,7 +489,7 @@ class TestWaveformSnippetDutyCycle:
         assert high_count > low_count * 5
 
 
-# ===================================================================== round-trip: load yaml + translate
+# ======================================== round-trip: load yaml + translate
 
 @pytest.mark.skipif(not _YAML.exists(), reason="reference YAML not present")
 class TestRoundTrip:
@@ -508,6 +516,6 @@ class TestRoundTrip:
         lib = load_event_library(str(_YAML))
         for name, ev in lib.events.items():
             try:
-                insertions = translate_event(ev, lib, start_ms=0.0)
+                translate_event(ev, lib, start_ms=0.0)
             except Exception as exc:
                 pytest.fail(f"translate_event raised for {name!r}: {exc}")

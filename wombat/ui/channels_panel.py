@@ -195,10 +195,11 @@ class ChannelsPanel(QWidget):
         self._tree.clear()
 
         active_ch = self._project.active_index
-        active_li = -1 if prev_is_channel else (self._editor.active_layer_index if self._editor else 0)
+        active_li = -1 if prev_is_channel else (
+            self._editor.active_layer_index if self._editor else 0
+        )
 
         for ci, ch in enumerate(self._project.channels):
-            blend_text = f"[{'✓' if ch.enabled else '✗'}] {ch.name}"
             ch_item = QTreeWidgetItem([ch.name])
             ch_item.setFlags(
                 ch_item.flags()
@@ -492,7 +493,10 @@ class ChannelsPanel(QWidget):
         """Return (channel_idx, layer_idx) for the currently selected item."""
         item = self._tree.currentItem()
         if item is None:
-            return self._project.active_index, self._editor.active_layer_index if self._editor else 0
+            return (
+                self._project.active_index,
+                self._editor.active_layer_index if self._editor else 0,
+            )
         ci = item.data(0, _ROLE_CH_IDX)
         li = item.data(0, _ROLE_LAYER_IDX)
         if li == -1:

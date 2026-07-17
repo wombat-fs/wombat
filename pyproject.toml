@@ -29,7 +29,10 @@ exclude = ["OFS", "funscript-tools", ".venv"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
-ignore = []
+# UP042 (use StrEnum): our `str, Enum` classes (BlendMode, FadeCurve, …) are a
+# deliberate choice — see their docstrings. StrEnum changes str()/format output,
+# and value-based equality surviving module reloads is relied upon.
+ignore = ["UP042"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

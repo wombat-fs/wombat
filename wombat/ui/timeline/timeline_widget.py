@@ -29,7 +29,6 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import numpy as np
-
 from PySide6.QtCore import QPointF, QRect, QRectF, QSize, Qt, Signal, Slot
 from PySide6.QtGui import (
     QColor,
@@ -727,7 +726,7 @@ class TimelineWidget(QWidget):
     def contextMenuEvent(self, event) -> None:
         y = event.pos().y()
         if y < _RULER_H and self._project is not None:
-            from PySide6.QtWidgets import QMenu, QInputDialog
+            from PySide6.QtWidgets import QInputDialog, QMenu
             t = self._viewport.x_to_time(float(event.pos().x()))
             t_label = _format_time(t, self._viewport.visible_time)
             menu = QMenu(self)
@@ -749,7 +748,11 @@ class TimelineWidget(QWidget):
         """Return a chapter within tol pixels of t, or None."""
         if self._project is None:
             return None
-        tol_t = tol_px / self._viewport.width * self._viewport.visible_time if self._viewport.width else 0.01
+        tol_t = (
+            tol_px / self._viewport.width * self._viewport.visible_time
+            if self._viewport.width
+            else 0.01
+        )
         for ch in self._project.chapters:
             if abs(ch.at - t) <= tol_t:
                 return ch
@@ -1167,7 +1170,6 @@ class TimelineWidget(QWidget):
         size = 5
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(color)
-        from PySide6.QtGui import QPolygon
         from PySide6.QtCore import QPoint
         if facing_right:
             pts = [QPoint(cx, cy - size), QPoint(cx + size, cy), QPoint(cx, cy + size)]

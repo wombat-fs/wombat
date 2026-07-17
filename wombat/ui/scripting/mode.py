@@ -88,7 +88,6 @@ class RecordingMode(ScriptingMode):
     """
 
     def __init__(self) -> None:
-        from PySide6.QtCore import QTimer, Signal
         # Signals require a QObject; we use a plain companion object instead
         # so RecordingMode doesn't need to inherit QObject itself.
         self._value: int = 50

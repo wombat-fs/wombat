@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from wombat.domain.action import Action, ActionList
-from wombat.domain.funscript import Funscript, FunscriptMetadata
+from wombat.domain.funscript import Funscript
 from wombat.domain.funscript_io import FunscriptError, load_funscript, save_funscript
 
 FIXTURES = Path(__file__).parent / "fixtures"

@@ -1,8 +1,6 @@
 """Keybindings loader — comment-stripping and override merge."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from wombat import keybindings

@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)

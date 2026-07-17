@@ -1,11 +1,11 @@
 """Tests for Channel, Layer, BlendMode, and the funscript conversion seam."""
-import pytest
+
+from pathlib import Path
 
 from wombat.domain.action import Action, ActionList
 from wombat.domain.channel import BlendMode, Channel, Layer
-from wombat.domain.funscript import Funscript, FunscriptMetadata
+from wombat.domain.funscript import Funscript
 from wombat.domain.funscript_io import load_funscript
-from pathlib import Path
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -120,11 +120,10 @@ def test_domain_does_not_import_pyside6():
 
 
 def test_domain_does_not_import_mpv():
-    import sys
-    mpv_loaded = "mpv" in sys.modules and sys.modules["mpv"] is not None
     # mpv might be loaded already from conftest; just verify domain __init__ doesn't cause it
     # Re-import domain and check no new mpv references introduced
     import importlib
+
     import wombat.domain
     importlib.reload(wombat.domain)
     # If we get here without error, mpv wasn't needed

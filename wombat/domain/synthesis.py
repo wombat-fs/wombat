@@ -25,7 +25,6 @@ from wombat.domain.action import Action, ActionList
 from wombat.domain.channel import BlendMode, FadeCurve, Layer
 from wombat.domain.interpolate import values_at as _values_at
 
-
 # ------------------------------------------------------------------ params
 
 @dataclass(frozen=True)
@@ -57,7 +56,7 @@ def synthesize(layers: list[Layer], params: SynthesisParams | None = None) -> Ac
     if params is None:
         params = SynthesisParams()
 
-    enabled = [l for l in layers if l.enabled]
+    enabled = [layer for layer in layers if layer.enabled]
     if not enabled:
         return ActionList()
 

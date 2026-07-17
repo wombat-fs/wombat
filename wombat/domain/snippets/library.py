@@ -7,17 +7,14 @@ build from scratch by choosing rhythm + pos algorithm directly.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
 
 from wombat.domain.snippets.base import BeatSnippet, WaveformSnippet
 from wombat.domain.snippets.positions import (
     Alternate,
     AlternateOverBase,
-    Constant,
     FollowBase,
     Ramp,
     Sine,
-    Triangle,
 )
 from wombat.domain.snippets.rhythms import (
     Accelerando,
@@ -28,7 +25,7 @@ from wombat.domain.snippets.rhythms import (
     Swing,
 )
 
-Snippet = Union[BeatSnippet, WaveformSnippet]
+Snippet = BeatSnippet | WaveformSnippet
 
 
 @dataclass

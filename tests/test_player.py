@@ -2,8 +2,6 @@
 
 We mock the mpv.MPV handle so these run without a display or libmpv installation.
 """
-import sys
-import types
 import unittest
 from unittest.mock import MagicMock, patch
 

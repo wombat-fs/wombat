@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QTimer, Qt, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -31,8 +31,8 @@ from wombat.domain.channel import BlendMode
 from wombat.domain.snippets.base import BeatSnippet, ParamSpec, WaveformSnippet
 from wombat.domain.snippets.library import PRESETS, SnippetEntry
 from wombat.domain.snippets.positions import (
-    AlternateOverBase,
     Alternate,
+    AlternateOverBase,
     Constant,
     FollowBase,
     Ramp,
@@ -149,7 +149,11 @@ def _make_control(spec: ParamSpec) -> QWidget:
         cb2 = QComboBox()
         for ch in (spec.choices or []):
             cb2.addItem(ch)
-        idx = (spec.choices or []).index(spec.default) if spec.default in (spec.choices or []) else 0
+        idx = (
+            (spec.choices or []).index(spec.default)
+            if spec.default in (spec.choices or [])
+            else 0
+        )
         cb2.setCurrentIndex(idx)
         cb2.setProperty("_spec_key", spec.key)
         return cb2

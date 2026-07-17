@@ -42,7 +42,9 @@ class RecordingPanel(QWidget):
         self._slider.setValue(50)
         self._slider.setTickPosition(QSlider.TickPosition.TicksBothSides)
         self._slider.setTickInterval(10)
-        self._slider.setToolTip("Current position (0–100).  Drag during recording to capture motion.")
+        self._slider.setToolTip(
+            "Current position (0–100).  Drag during recording to capture motion."
+        )
         self._slider.valueChanged.connect(self._on_slider_changed)
         layout.addWidget(self._slider, stretch=1, alignment=Qt.AlignmentFlag.AlignHCenter)
 

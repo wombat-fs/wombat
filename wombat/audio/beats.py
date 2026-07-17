@@ -62,7 +62,7 @@ class BeatGrid:
         object.__setattr__(self, "counts", counts)
 
     @classmethod
-    def empty(cls) -> "BeatGrid":
+    def empty(cls) -> BeatGrid:
         return cls(np.empty(0, dtype=np.float64), np.empty(0, dtype=np.int32))
 
     def __len__(self) -> int:
@@ -73,7 +73,7 @@ class BeatGrid:
         """Timestamps where count == 1 (bar starts)."""
         return self.times[self.counts == DOWNBEAT_COUNT]
 
-    def in_span(self, t0: float, t1: float) -> "BeatGrid":
+    def in_span(self, t0: float, t1: float) -> BeatGrid:
         """Sub-grid of beats with ``t0 <= time <= t1`` (order preserved)."""
         if len(self.times) == 0:
             return self

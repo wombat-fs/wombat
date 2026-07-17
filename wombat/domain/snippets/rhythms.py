@@ -5,8 +5,6 @@ All classes expose param_specs() so the UI can auto-generate controls.
 """
 from __future__ import annotations
 
-import math
-
 import numpy as np
 
 from wombat.domain.snippets.base import ParamSpec, Rhythm

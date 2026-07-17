@@ -1,9 +1,8 @@
 """Tests for Action and ActionList."""
-import pytest
 import numpy as np
+import pytest
 
 from wombat.domain.action import Action, ActionList
-
 
 # ------------------------------------------------------------------ Action
 
@@ -109,7 +108,8 @@ def test_at_time_outside_error():
 
 def test_at_time_picks_nearest():
     al = ActionList([Action(1.0, 10), Action(1.05, 20)])
-    # t=1.03 is closer to 1.05 (dist 0.02) than to 1.0 (dist 0.03) — wait, 1.03-1.0=0.03, 1.05-1.03=0.02
+    # t=1.03 is closer to 1.05 (dist 0.02) than to 1.0 (dist 0.03)
+    # (1.03-1.0=0.03, 1.05-1.03=0.02)
     result = al.at_time(1.03, 0.05)
     assert result == Action(1.05, 20)
 

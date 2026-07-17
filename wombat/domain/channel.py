@@ -13,7 +13,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from wombat.domain.action import ActionList
-from wombat.domain.funscript import Funscript, FunscriptMetadata as _FM
+from wombat.domain.funscript import Funscript
+from wombat.domain.funscript import FunscriptMetadata as _FM
 
 if TYPE_CHECKING:
     from wombat.domain.synthesis import SynthesisParams
@@ -120,8 +121,9 @@ class Channel:
         With real layer stacks: delegates to domain/synthesis.py fold engine.
         """
         from wombat.domain.synthesis import (
-            SynthesisParams as _SP,
             get_default_params as _get_default,
+        )
+        from wombat.domain.synthesis import (
             synthesize as _synth,
         )
         if params is None:

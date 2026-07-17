@@ -12,12 +12,9 @@ Tests:
 """
 from __future__ import annotations
 
-import pytest
-
 from wombat.domain.action import Action, ActionList
 from wombat.domain.channel import BlendMode, Channel, FadeCurve, Layer
 from wombat.domain.synthesis import SynthesisParams, synthesize
-
 
 # ------------------------------------------------------------------ helpers
 
@@ -394,9 +391,10 @@ def test_different_params_different_cache_slot():
 
 def test_round_trip_export_reload():
     """Synthesized output exports to .funscript and reloads equal (ms rounding aside)."""
-    import tempfile, json
+    import tempfile
     from pathlib import Path
-    from wombat.domain.funscript_io import save_funscript, load_funscript
+
+    from wombat.domain.funscript_io import load_funscript, save_funscript
 
     base = _layer(_al((0.0, 0), (1.0, 100), (2.0, 50)))
     over = _layer(_al((0.0, 80), (2.0, 80)), name="over",

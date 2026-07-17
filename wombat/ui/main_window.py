@@ -13,17 +13,17 @@ from PySide6.QtWidgets import (
 )
 
 import wombat.keybindings as keybindings
+from wombat.app.autobackup import AutoBackupManager
 from wombat.app.editor import EditorController
 from wombat.app.project import Project
 from wombat.app.undo import UndoStack
+from wombat.audio.beat_loader import BeatDetectionLoader
+from wombat.audio.loader import WaveformLoader
 from wombat.domain.funscript_io import FunscriptError
 from wombat.playback.player import VideoPlayer
 from wombat.settings import AppSettings
-from wombat.app.autobackup import AutoBackupManager
-from wombat.audio.beat_loader import BeatDetectionLoader
-from wombat.audio.loader import WaveformLoader
-from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.channels_panel import ChannelsPanel
+from wombat.ui.chapters_panel import ChaptersPanel
 from wombat.ui.device_simulator import SimulatorOverlay
 from wombat.ui.events_panel import EventsPanel
 from wombat.ui.heatmap_export import render_heatmap
@@ -561,6 +561,7 @@ class MainWindow(QMainWindow):
     @Slot(bool)
     def _on_theme_toggled(self, dark: bool) -> None:
         from PySide6.QtWidgets import QApplication
+
         from wombat.ui.theme import apply_dark_theme, apply_light_theme
         app = QApplication.instance()
         if dark:

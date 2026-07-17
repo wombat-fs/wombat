@@ -60,7 +60,8 @@ def test_parse_double_dot_middle_returns_none():
 # ------------------------------------------------------------------ roundtrip
 
 @pytest.mark.parametrize(
-    "name", ["alpha", "beta", "volume", "frequency", "pulse_frequency", "pulse_width", "pulse_rise_time"]
+    "name",
+    ["alpha", "beta", "volume", "frequency", "pulse_frequency", "pulse_width", "pulse_rise_time"],
 )
 def test_roundtrip(name: str) -> None:
     fn = channel_filename("clip", name)

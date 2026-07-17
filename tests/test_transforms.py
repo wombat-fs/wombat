@@ -137,7 +137,6 @@ def test_simplify_dropped_points_within_epsilon():
     al = _al((0.0, 0), (0.5, 1), (1.0, 0), (1.5, 1), (2.0, 0))
     epsilon = 2.0
     simplified = simplify_rdp(al, epsilon)
-    kept_ats = {a.at for a in simplified}
     # All dropped points must have been within epsilon of the kept polyline
     # (implicit: just check first/last are kept)
     assert al[0] in simplified

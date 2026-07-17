@@ -1,7 +1,6 @@
 """Tests for the Beat Detection section of the preferences dialog."""
 import sys
 
-import pytest
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from wombat.ui.preferences_dialog import PreferencesDialog
