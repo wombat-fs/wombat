@@ -10,7 +10,7 @@ See `ROADMAP.md` for the architecture overview, package layout, and the phased b
 
 ## Tech Stack
 
-- **Python 3** (3.10+ recommended)
+- **Python 3.11+** (required — `pyproject.toml` sets `requires-python = ">=3.11"` and ruff targets `py311`)
 - **PySide6** for the GUI (Python Qt bindings)
 - **python-mpv** (libmpv) for video playback — chosen over python-vlc for frame-accurate seeking/stepping, which is essential when placing actions against specific video frames. libmpv is cross-platform (Linux/macOS/Windows); it's the same player OFS relies on.
 
