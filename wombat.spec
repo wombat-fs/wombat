@@ -10,9 +10,11 @@ explicitly from the absolute path in the WOMBAT_LIBMPV env var (set by the CI
 workflow or your shell), and the runtime hook packaging/pyi_rth_libmpv.py points
 python-mpv at the bundled copy.
 
-macOS caveat (expect to iterate): libmpv drags in a graph of dylibs (ffmpeg,
-libass, …). This spec bundles the top-level library; the CI workflow then runs
-`dylibbundler` to pull in the transitive deps and rewrite their load paths.
+macOS note: libmpv drags in a graph of dylibs (ffmpeg, libass, …). PyInstaller
+follows those dependencies automatically and bundles them into the .app with
+correct @rpath install names, so we do NOT post-process with dylibbundler —
+it doesn't see the Qt frameworks (loaded at runtime via PySide6, not linked
+into the executable) and would delete them, producing a broken ~14 MB app.
 """
 import os
 import sys

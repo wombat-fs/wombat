@@ -37,11 +37,12 @@ jobs:
           uv sync --extra dev
           uv pip install pyinstaller
 
-      # --- libmpv (macOS): Homebrew, plus dylibbundler for the dep graph ------
+      # --- libmpv (macOS): Homebrew. PyInstaller collects libmpv's transitive
+      #     dep graph (ffmpeg/libass/…) on its own, so no dylibbundler needed. --
       - name: Install libmpv (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install mpv dylibbundler
+          brew install mpv
           echo "WOMBAT_LIBMPV=$(brew --prefix mpv)/lib/libmpv.dylib" >> "$GITHUB_ENV"
 
       # --- libmpv (Windows): drop a prebuilt libmpv-2.dll next to the build ---
@@ -65,17 +66,15 @@ jobs:
           WOMBAT_VERSION: ${{ github.ref_name }}
         run: uv run pyinstaller wombat.spec --noconfirm
 
-      # --- macOS: collect libmpv's transitive dylibs into the .app, ad-hoc sign,
-      #     and package a .dmg. The dylibbundler step is the one most likely to
-      #     need tuning against the build log. -------------------------------
-      - name: Bundle dylibs and package (macOS)
+      # --- macOS: ad-hoc sign and package a .dmg. PyInstaller already bundles
+      #     libmpv + its transitive dylibs and the Qt frameworks with correct
+      #     @rpath install names — do NOT run dylibbundler here: it doesn't see
+      #     Qt (loaded at runtime, not linked) and wipes the Qt frameworks,
+      #     yielding a broken ~14 MB app. ------------------------------------
+      - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           APP="dist/Wombat.app"
-          dylibbundler -od -b \
-            -x "$APP/Contents/MacOS/Wombat" \
-            -d "$APP/Contents/Frameworks" \
-            -p "@executable_path/../Frameworks"
           # Ad-hoc signature so Gatekeeper doesn't kill an unsigned bundle outright.
           # Not notarized: testers still right-click -> Open the first time.
           codesign --force --deep --sign - "$APP"
