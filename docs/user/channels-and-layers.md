@@ -55,7 +55,11 @@ its layer sub-lanes. From the **Channels** panel you can:
 
 - **Add Layer**, **Duplicate Layer**, **Remove Layer** (the base can't be
   removed).
-- **Reorder** layers up/down — order is the stacking order.
+- **Merge Down** — flatten a layer into the one beneath it; the two become a
+  single layer (the image-editor "merge down"). Right-click a layer to find it.
+- **Reorder** layers up/down. The panel lists the stack **top-first** (the
+  topmost, last-applied override at the top; the base at the bottom), so moving a
+  layer **up** gives it higher priority over those below it.
 - **Rename** a channel or layer (double-click).
 - **Right-click** a layer for its **Blend mode** picker and other options.
 
